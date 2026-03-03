@@ -561,7 +561,7 @@ final class AppViewModel: ObservableObject {
                     details: errorText,
                     level: .error
                 )
-                statusText = errorText
+                statusText = "\(operation)失败，请查看日志。"
                 await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
         }
@@ -600,7 +600,7 @@ final class AppViewModel: ObservableObject {
                     details: errorText,
                     level: .error
                 )
-                statusText = errorText
+                statusText = "\(operation)失败，请查看日志。"
                 await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
         }

@@ -217,15 +217,45 @@ final class PublishService {
     }
 
     private func stagePublishFiles(project: BlogProject) throws -> ProcessResult {
-        var arguments = ["add", "--all", "--", "."]
-        arguments.append(contentsOf: [
+        let baseArguments = ["add", "--all", "--", "."]
+        let commonExcludes = [
             ":(exclude)HugoDesk",
             ":(exclude)HugoDesk/**",
             ":(exclude)HugoDeskArchive",
             ":(exclude)HugoDeskArchive/**",
-            ":(exclude).hugodesk.local.json"
-        ])
-        return try runner.run(command: "git", arguments: arguments, in: project.rootURL)
+            ":(exclude)hugo.toml",
+            ":(glob,exclude)**/HugoDesk",
+            ":(glob,exclude)**/HugoDesk/**",
+            ":(glob,exclude)**/HugoDeskArchive",
+            ":(glob,exclude)**/HugoDeskArchive/**",
+            ":(glob,exclude)**/hugo.toml"
+        ]
+        let localBundleExcludes = [
+            ":(exclude).hugodesk.local.json",
+            ":(glob,exclude)**/.hugodesk.local.json"
+        ]
+
+        do {
+            return try runner.run(
+                command: "git",
+                arguments: baseArguments + commonExcludes + localBundleExcludes,
+                in: project.rootURL
+            )
+        } catch let ProcessRunnerError.commandFailed(_, _, output) {
+            let shouldRetryWithoutBundlePathspec =
+                output.contains("ignored by one of your .gitignore files")
+                && output.contains(".hugodesk.local.json")
+
+            if shouldRetryWithoutBundlePathspec {
+                return try runner.run(
+                    command: "git",
+                    arguments: baseArguments + commonExcludes,
+                    in: project.rootURL
+                )
+            }
+
+            throw ProcessRunnerError.commandFailed(command: "git add", code: 1, output: output)
+        }
     }
 
     private func renderProcessLog(step: String, result: ProcessResult) -> String {

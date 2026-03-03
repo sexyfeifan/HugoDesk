@@ -71,6 +71,8 @@ struct RootView: View {
                     Text(viewModel.statusText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     Spacer()
                     Text("v\(AppVersion.current)")
                         .font(.caption2)

@@ -19,13 +19,12 @@ swift run
 - AI formatting workflow (configurable API endpoint/model/key)
 - Release diagnostics with non-fast-forward detection and sync guidance
 
-## What's New ✨ (v0.3.4)
+## What's New ✨ (v0.3.5)
 
-- 📜 Reworked publish output into structured logs (command, cwd, exit code, duration, stdout, stderr)
-- 🧠 Added automatic AI troubleshooting suggestions on publish failures (when AI config is present)
-- 🗂️ Added foldable log panel with clear/copy actions and selectable text
-- ✍️ Fixed Chinese Pinyin IME interruption in markdown editor by skipping sync during marked text composition
-- 🧱 Kept blog-publish guardrails to exclude HugoDesk/HugoDeskArchive/.hugodesk.local.json
+- 🚫 Added `hugo.toml` to publish exclusion rules to prevent accidental upload
+- 🧱 Improved `git add` fallback for ignored `.hugodesk.local.json` pathspec failures
+- 🗂️ Kept full error details in publish logs while status bar now shows concise messages only
+- 🧼 Reduced visual noise in bottom status area with single-line truncation
 
 ## Artifact Layout
 
