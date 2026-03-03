@@ -22,6 +22,58 @@ enum AIServiceError: LocalizedError {
 
 struct AIService {
     func formatMarkdown(input: String, profile: AIProfile, apiKey: String) async throws -> String {
+        let prompt = """
+        请将以下内容整理为结构清晰、语义自然的 Markdown 文档：
+        1. 保留原文核心信息，不臆造事实。
+        2. 自动补齐合理标题、段落、列表、引用或代码块。
+        3. 保持中文表达自然，避免模板化口吻。
+        4. 仅输出 Markdown 正文，不要解释。
+
+        原文如下：
+        \(input)
+        """
+
+        return try await requestCompletion(
+            systemPrompt: "You are a professional markdown editor.",
+            userPrompt: prompt,
+            profile: profile,
+            apiKey: apiKey,
+            temperature: 0.2
+        )
+    }
+
+    func suggestFix(operation: String, errorLog: String, profile: AIProfile, apiKey: String) async throws -> String {
+        let prompt = """
+        请根据以下失败日志给出可执行的修复方案。
+
+        操作：\(operation)
+
+        错误日志：
+        \(errorLog)
+
+        输出要求：
+        1. 先给“最可能原因”（最多 3 条）。
+        2. 再给“排查步骤”（按顺序，命令可直接执行）。
+        3. 最后给“修复后验证命令”。
+        4. 使用中文，输出 Markdown。
+        """
+
+        return try await requestCompletion(
+            systemPrompt: "You are a senior DevOps and Git troubleshooting assistant.",
+            userPrompt: prompt,
+            profile: profile,
+            apiKey: apiKey,
+            temperature: 0.1
+        )
+    }
+
+    private func requestCompletion(
+        systemPrompt: String,
+        userPrompt: String,
+        profile: AIProfile,
+        apiKey: String,
+        temperature: Double
+    ) async throws -> String {
         let baseURL = profile.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let model = profile.model.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,23 +87,12 @@ struct AIService {
             throw AIServiceError.invalidEndpoint
         }
 
-        let prompt = """
-        请将以下内容整理为结构清晰、语义自然的 Markdown 文档：
-        1. 保留原文核心信息，不臆造事实。
-        2. 自动补齐合理标题、段落、列表、引用或代码块。
-        3. 保持中文表达自然，避免模板化口吻。
-        4. 仅输出 Markdown 正文，不要解释。
-
-        原文如下：
-        \(input)
-        """
-
         let payload: [String: Any] = [
             "model": model,
-            "temperature": 0.2,
+            "temperature": temperature,
             "messages": [
-                ["role": "system", "content": "You are a professional markdown editor."],
-                ["role": "user", "content": prompt]
+                ["role": "system", "content": systemPrompt],
+                ["role": "user", "content": userPrompt]
             ]
         ]
 

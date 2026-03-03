@@ -1,8 +1,28 @@
 import Foundation
 
 struct ProcessResult {
+    let command: String
+    let arguments: [String]
+    let workingDirectory: String
     let exitCode: Int32
-    let output: String
+    let stdout: String
+    let stderr: String
+    let startedAt: Date
+    let finishedAt: Date
+
+    var commandLine: String {
+        ([command] + arguments).joined(separator: " ")
+    }
+
+    var duration: TimeInterval {
+        finishedAt.timeIntervalSince(startedAt)
+    }
+
+    var output: String {
+        [stdout, stderr]
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
 }
 
 enum ProcessRunnerError: LocalizedError {
@@ -29,26 +49,39 @@ final class ProcessRunner {
             process.arguments = [command] + arguments
         }
 
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
 
+        let startedAt = Date()
         try process.run()
         process.waitUntilExit()
+        let finishedAt = Date()
 
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
 
-        let out = String(data: outData, encoding: .utf8) ?? ""
-        let err = String(data: errData, encoding: .utf8) ?? ""
-        let combined = [out, err].filter { !$0.isEmpty }.joined(separator: "\n")
+        let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        let result = ProcessResult(exitCode: process.terminationStatus, output: combined)
+        let result = ProcessResult(
+            command: command,
+            arguments: arguments,
+            workingDirectory: cwd.path,
+            exitCode: process.terminationStatus,
+            stdout: stdout,
+            stderr: stderr,
+            startedAt: startedAt,
+            finishedAt: finishedAt
+        )
 
         if process.terminationStatus != 0 {
-            let commandLine = ([command] + arguments).joined(separator: " ")
-            throw ProcessRunnerError.commandFailed(command: commandLine, code: process.terminationStatus, output: combined)
+            throw ProcessRunnerError.commandFailed(
+                command: result.commandLine,
+                code: process.terminationStatus,
+                output: result.output
+            )
         }
 
         return result

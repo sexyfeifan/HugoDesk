@@ -361,6 +361,11 @@ struct MarkdownTextEditor: NSViewRepresentable {
         guard let textView = nsView.documentView as? ContextMenuTextView else { return }
         context.coordinator.parent = self
 
+        // Avoid interrupting IME composition (e.g. Chinese pinyin marked text).
+        if textView.hasMarkedText() {
+            return
+        }
+
         if textView.string != text {
             context.coordinator.isSyncingFromSwiftUI = true
             textView.string = text
@@ -390,6 +395,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
                   let textView = notification.object as? NSTextView else {
                 return
             }
+            if textView.hasMarkedText() {
+                return
+            }
             parent.text = textView.string
             parent.selection = textView.selectedRange()
         }
@@ -397,6 +405,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isSyncingFromSwiftUI,
                   let textView = notification.object as? NSTextView else {
+                return
+            }
+            if textView.hasMarkedText() {
                 return
             }
             parent.selection = textView.selectedRange()

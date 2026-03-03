@@ -1,7 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct PublishView: View {
     @ObservedObject var viewModel: AppViewModel
+    @State private var expandedLogIDs: Set<UUID> = []
+    @State private var showRawLog = false
 
     var body: some View {
         ScrollView {
@@ -83,8 +86,8 @@ struct PublishView: View {
                             }
                             Link("打开运行详情", destination: URL(string: run.htmlURL)!)
                         } else if !viewModel.latestWorkflowError.isEmpty {
-                            Text(viewModel.latestWorkflowError)
-                                .foregroundStyle(.red)
+                            Text("查询失败，请在下方日志查看错误详情与 AI 排障建议。")
+                                .foregroundStyle(.secondary)
                         } else {
                             Text("点击“查询最新状态”后显示结果。")
                                 .foregroundStyle(.secondary)
@@ -129,13 +132,75 @@ struct PublishView: View {
                     }
                 }
 
-                ModernCard(title: "命令输出") {
-                    TextEditor(text: $viewModel.publishLog)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 420)
-                        .padding(8)
-                        .background(Color.black.opacity(0.03))
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                ModernCard(title: "日志输出", subtitle: "可折叠查看详细日志，支持复制") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Button("清空日志") {
+                                viewModel.clearPublishLogs()
+                                expandedLogIDs.removeAll()
+                                showRawLog = false
+                            }
+                            Button("复制全部日志") {
+                                let pb = NSPasteboard.general
+                                pb.clearContents()
+                                pb.setString(viewModel.publishLog, forType: .string)
+                            }
+                            Spacer()
+                            Text("共 \(viewModel.publishLogEntries.count) 条")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        if viewModel.publishLogEntries.isEmpty {
+                            Text("暂无日志。执行“构建/检测/推送”后会在这里显示进程与错误详情。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(Array(viewModel.publishLogEntries.reversed())) { entry in
+                                        DisclosureGroup(isExpanded: bindingForLog(id: entry.id)) {
+                                            ScrollView(.horizontal) {
+                                                Text(entry.details.isEmpty ? "无详细输出" : entry.details)
+                                                    .font(.system(.caption, design: .monospaced))
+                                                    .textSelection(.enabled)
+                                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                            }
+                                            .padding(.top, 6)
+                                        } label: {
+                                            HStack(spacing: 8) {
+                                                Image(systemName: icon(for: entry.level))
+                                                    .foregroundStyle(color(for: entry.level))
+                                                Text("[\(entry.timestamp.formatted(date: .omitted, time: .standard))] \(entry.operation)")
+                                                    .font(.subheadline.weight(.semibold))
+                                                Text(entry.summary)
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                                Spacer()
+                                            }
+                                        }
+                                        .padding(8)
+                                        .background(Color.black.opacity(0.03))
+                                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    }
+                                }
+                            }
+                            .frame(minHeight: 240, maxHeight: 420)
+                        }
+
+                        DisclosureGroup("完整原始日志（可选择复制）", isExpanded: $showRawLog) {
+                            ScrollView([.vertical, .horizontal]) {
+                                Text(viewModel.publishLog.isEmpty ? "暂无输出" : viewModel.publishLog)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(6)
+                            }
+                            .frame(minHeight: 140, maxHeight: 260)
+                            .background(Color.black.opacity(0.03))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                        }
+                    }
                 }
 
                 Text("应用会在当前项目目录执行本机的 git/hugo/brew 命令。")
@@ -167,5 +232,36 @@ struct PublishView: View {
         case .warning: return .orange
         case .error: return .red
         }
+    }
+
+    private func icon(for level: PublishLogEntry.Level) -> String {
+        switch level {
+        case .info: return "info.circle"
+        case .success: return "checkmark.circle.fill"
+        case .warning: return "exclamationmark.triangle.fill"
+        case .error: return "xmark.octagon.fill"
+        }
+    }
+
+    private func color(for level: PublishLogEntry.Level) -> Color {
+        switch level {
+        case .info: return .blue
+        case .success: return .green
+        case .warning: return .orange
+        case .error: return .red
+        }
+    }
+
+    private func bindingForLog(id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedLogIDs.contains(id) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedLogIDs.insert(id)
+                } else {
+                    expandedLogIDs.remove(id)
+                }
+            }
+        )
     }
 }

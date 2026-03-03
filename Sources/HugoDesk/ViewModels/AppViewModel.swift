@@ -16,6 +16,7 @@ final class AppViewModel: ObservableObject {
     @Published var newPostFileName: String = "new-post.md"
 
     @Published var publishLog: String = ""
+    @Published var publishLogEntries: [PublishLogEntry] = []
     @Published var publishMessage: String = "chore: 发布博客更新"
     @Published var publishRemoteURL: String = ""
     @Published var githubToken: String = ""
@@ -235,57 +236,54 @@ final class AppViewModel: ObservableObject {
     }
 
     func runBuild() {
-        runTask {
+        runTask(operation: "构建站点", successStatus: "构建完成。") {
             let output = try self.publishService.runHugoBuild(project: self.project)
-            self.publishLog = output.isEmpty ? "构建完成（无输出）。" : output
-            self.statusText = "构建完成。"
+            return output.isEmpty ? "构建完成（无输出）。" : output
         }
     }
 
     func runGitStatus() {
-        runTask {
+        runTask(operation: "查看 Git 状态", successStatus: "Git 状态已更新。") {
             let output = try self.publishService.gitStatus(project: self.project)
-            self.publishLog = output
-            self.statusText = "Git 状态已更新。"
+            return output.isEmpty ? "Git 状态为空。" : output
         }
     }
 
     func runSyncWithRemote() {
-        runTask {
+        runTask(operation: "同步远端", successStatus: "已与远端分支同步。") {
             let output = try self.publishService.syncWithRemote(
                 project: self.project,
                 remoteURL: self.publishRemoteURL
             )
-            self.publishLog = output.isEmpty ? "同步完成（无输出）。" : output
-            self.statusText = "已与远端分支同步。"
+            return output.isEmpty ? "同步完成（无输出）。" : output
         }
     }
 
     func runPublish() {
-        runTask {
+        runTask(operation: "提交并推送", successStatus: "推送完成。") {
             let hasContent = !self.editorPost.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || !self.editorPost.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || FileManager.default.fileExists(atPath: self.editorPost.fileURL.path)
             if hasContent {
                 try self.postService.savePost(self.editorPost)
             }
+
             let fixed = try self.imageAssetService.normalizePostImageLinks(project: self.project)
             let output = try self.publishService.commitAndPush(
                 project: self.project,
                 message: self.publishMessage,
                 remoteURL: self.publishRemoteURL
             )
-            var prefix = ""
+
             if fixed.changedLinks > 0 {
-                prefix = "已自动修正图片链接：\(fixed.changedLinks) 条，影响文件 \(fixed.changedFiles) 个。\n\n"
+                return "已自动修正图片链接：\(fixed.changedLinks) 条，影响文件 \(fixed.changedFiles) 个。\n\n\(output)"
             }
-            self.publishLog = prefix + output
-            self.statusText = "推送完成。"
+            return output
         }
     }
 
     func refreshActionsStatus() {
-        runAsyncTask {
+        runAsyncTask(operation: "查询 Actions 状态", successStatus: "已获取最新 Actions 状态。") {
             self.latestWorkflowError = ""
             self.latestWorkflowStatus = nil
             let run = try await self.actionsService.fetchLatestRun(
@@ -294,7 +292,13 @@ final class AppViewModel: ObservableObject {
                 workflowName: self.workflowName
             )
             self.latestWorkflowStatus = run
-            self.statusText = "已获取最新 Actions 状态。"
+            return """
+            Workflow: \(run.name)
+            分支: \(run.branch)
+            状态: \(run.statusText)
+            提交: \(run.sha)
+            详情: \(run.htmlURL)
+            """
         }
     }
 
@@ -341,13 +345,12 @@ final class AppViewModel: ObservableObject {
     }
 
     func runEnvironmentDiagnostics() {
-        runTask {
+        runTask(operation: "一键检测推送能力", successStatus: "发布环境检测完成。") {
             let report = try self.publishService.diagnosePublishEnvironment(
                 project: self.project,
                 remoteURL: self.publishRemoteURL
             )
-            self.publishLog = report
-            self.statusText = "发布环境检测完成。"
+            return report
         }
     }
 
@@ -464,7 +467,12 @@ final class AppViewModel: ObservableObject {
             editorPost = BlogPost.empty(in: project.contentURL)
         }
 
-        publishLog = "已从 \(sourceName) 还原配置。"
+        appendPublishLog(
+            operation: "配置还原",
+            summary: "已从 \(sourceName) 还原配置。",
+            details: "配置源：\(sourceName)",
+            level: .success
+        )
     }
 
     private func loadLocalConfigBundleIfPresent() -> Bool {
@@ -483,7 +491,12 @@ final class AppViewModel: ObservableObject {
             aiAPIKey = bundle.aiAPIKey.isEmpty ? credentialStore.loadAIAPIKey(for: project.rootPath) : bundle.aiAPIKey
             return true
         } catch {
-            publishLog = "读取本地配置包失败：\(error.localizedDescription)\n路径：\(project.localConfigBundleURL.path)"
+            appendPublishLog(
+                operation: "读取本地配置包",
+                summary: "读取失败",
+                details: "错误：\(error.localizedDescription)\n路径：\(project.localConfigBundleURL.path)",
+                level: .warning
+            )
             return false
         }
     }
@@ -495,28 +508,135 @@ final class AppViewModel: ObservableObject {
         project.publishBranch = source.publishBranch
     }
 
-    private func runTask(_ action: @escaping () throws -> Void) {
+    func clearPublishLogs() {
+        publishLogEntries.removeAll()
+        publishLog = ""
+    }
+
+    private func appendPublishLog(
+        operation: String,
+        summary: String,
+        details: String,
+        level: PublishLogEntry.Level
+    ) {
+        let entry = PublishLogEntry(
+            timestamp: Date(),
+            operation: operation,
+            summary: summary,
+            details: details,
+            level: level
+        )
+        publishLogEntries.append(entry)
+        publishLog = publishLogEntries.map(\.rendered).joined(separator: "\n\n")
+    }
+
+    private func runTask(
+        operation: String,
+        successStatus: String,
+        _ action: @escaping () throws -> String
+    ) {
         isBusy = true
+        appendPublishLog(
+            operation: operation,
+            summary: "开始执行",
+            details: "时间：\(Date().formatted(date: .omitted, time: .standard))",
+            level: .info
+        )
         Task {
             defer { isBusy = false }
             do {
-                try action()
+                let details = try action()
+                appendPublishLog(
+                    operation: operation,
+                    summary: "执行完成",
+                    details: details,
+                    level: .success
+                )
+                statusText = successStatus
             } catch {
-                statusText = error.localizedDescription
+                let errorText = error.localizedDescription
+                appendPublishLog(
+                    operation: operation,
+                    summary: "执行失败",
+                    details: errorText,
+                    level: .error
+                )
+                statusText = errorText
+                await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
         }
     }
 
-    private func runAsyncTask(_ action: @escaping () async throws -> Void) {
+    private func runAsyncTask(
+        operation: String,
+        successStatus: String,
+        _ action: @escaping () async throws -> String
+    ) {
         isBusy = true
+        appendPublishLog(
+            operation: operation,
+            summary: "开始执行",
+            details: "时间：\(Date().formatted(date: .omitted, time: .standard))",
+            level: .info
+        )
         Task {
             defer { isBusy = false }
             do {
-                try await action()
+                let details = try await action()
+                appendPublishLog(
+                    operation: operation,
+                    summary: "执行完成",
+                    details: details,
+                    level: .success
+                )
+                latestWorkflowError = ""
+                statusText = successStatus
             } catch {
-                latestWorkflowError = error.localizedDescription
-                statusText = error.localizedDescription
+                let errorText = error.localizedDescription
+                latestWorkflowError = errorText
+                appendPublishLog(
+                    operation: operation,
+                    summary: "执行失败",
+                    details: errorText,
+                    level: .error
+                )
+                statusText = errorText
+                await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
+        }
+    }
+
+    private func appendAITroubleshootingIfConfigured(operation: String, errorLog: String) async {
+        let profile = AIProfile(
+            baseURL: aiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            model: aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let token = aiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !profile.baseURL.isEmpty, !profile.model.isEmpty, !token.isEmpty else {
+            return
+        }
+
+        do {
+            let clippedError = String(errorLog.prefix(3000))
+            let advice = try await aiService.suggestFix(
+                operation: operation,
+                errorLog: clippedError,
+                profile: profile,
+                apiKey: token
+            )
+            appendPublishLog(
+                operation: "AI 排障建议",
+                summary: "已生成 \(operation) 的修复建议",
+                details: advice,
+                level: .warning
+            )
+        } catch {
+            appendPublishLog(
+                operation: "AI 排障建议",
+                summary: "生成失败",
+                details: error.localizedDescription,
+                level: .warning
+            )
         }
     }
 
@@ -602,6 +722,30 @@ final class AppViewModel: ObservableObject {
         )
 
         return checks
+    }
+}
+
+struct PublishLogEntry: Identifiable {
+    enum Level {
+        case info
+        case success
+        case warning
+        case error
+    }
+
+    let id = UUID()
+    let timestamp: Date
+    let operation: String
+    let summary: String
+    let details: String
+    let level: Level
+
+    var rendered: String {
+        let clock = timestamp.formatted(date: .omitted, time: .standard)
+        if details.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "[\(clock)] \(operation) - \(summary)"
+        }
+        return "[\(clock)] \(operation) - \(summary)\n\(details)"
     }
 }
 

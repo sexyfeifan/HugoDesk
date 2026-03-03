@@ -11,7 +11,7 @@ final class PublishService {
             arguments: ["--gc", "--minify"],
             in: project.rootURL
         )
-        return result.output
+        return renderProcessLog(step: "构建 Hugo 站点", result: result)
     }
 
     func gitStatus(project: BlogProject) throws -> String {
@@ -20,32 +20,25 @@ final class PublishService {
             arguments: ["status", "--short", "--branch"],
             in: project.rootURL
         )
-        return result.output
+        return renderProcessLog(step: "查看 Git 状态", result: result)
     }
 
     func commitAndPush(project: BlogProject, message: String, remoteURL: String) throws -> String {
         var logs: [String] = []
 
         if !remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let setRemoteResult = ensureRemoteURL(project: project, remoteURL: remoteURL)
-            if !setRemoteResult.isEmpty {
-                logs.append(setRemoteResult)
-            }
+            logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
         }
 
         let add = try stagePublishFiles(project: project)
-        if !add.output.isEmpty {
-            logs.append(add.output)
-        }
+        logs.append(renderProcessLog(step: "暂存变更", result: add))
 
         do {
             let commit = try runner.run(command: "git", arguments: ["commit", "-m", message], in: project.rootURL)
-            if !commit.output.isEmpty {
-                logs.append(commit.output)
-            }
+            logs.append(renderProcessLog(step: "提交变更", result: commit))
         } catch let ProcessRunnerError.commandFailed(_, _, output) {
             if output.contains("nothing to commit") || output.contains("no changes added") {
-                logs.append("No staged changes. Skip commit.")
+                logs.append("== 提交变更 ==\n无需提交：没有新的暂存变更。")
             } else {
                 throw ProcessRunnerError.commandFailed(command: "git commit", code: 1, output: output)
             }
@@ -57,12 +50,10 @@ final class PublishService {
                 arguments: ["push", project.gitRemote, project.publishBranch],
                 in: project.rootURL
             )
-            if !push.output.isEmpty {
-                logs.append(push.output)
-            }
+            logs.append(renderProcessLog(step: "推送到远端", result: push))
         } catch let ProcessRunnerError.commandFailed(_, _, output) {
             if containsNonFastForward(output) {
-                logs.append("Push 被拒绝（non-fast-forward），已自动执行同步后重试。")
+                logs.append("== 推送到远端 ==\nPush 被拒绝（non-fast-forward），已自动执行同步后重试。")
                 let syncOutput = try syncWithRemote(project: project, remoteURL: remoteURL)
                 if !syncOutput.isEmpty {
                     logs.append(syncOutput)
@@ -72,25 +63,20 @@ final class PublishService {
                     arguments: ["push", project.gitRemote, project.publishBranch],
                     in: project.rootURL
                 )
-                if !retryPush.output.isEmpty {
-                    logs.append(retryPush.output)
-                }
+                logs.append(renderProcessLog(step: "重试推送到远端", result: retryPush))
             } else {
                 throw ProcessRunnerError.commandFailed(command: "git push", code: 1, output: output)
             }
         }
 
-        return logs.joined(separator: "\n")
+        return logs.joined(separator: "\n\n")
     }
 
     func syncWithRemote(project: BlogProject, remoteURL: String) throws -> String {
         var logs: [String] = []
 
         if !remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let setRemoteResult = ensureRemoteURL(project: project, remoteURL: remoteURL)
-            if !setRemoteResult.isEmpty {
-                logs.append(setRemoteResult)
-            }
+            logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
         }
 
         let fetch = try runner.run(
@@ -98,29 +84,23 @@ final class PublishService {
             arguments: ["fetch", project.gitRemote, project.publishBranch],
             in: project.rootURL
         )
-        if !fetch.output.isEmpty {
-            logs.append(fetch.output)
-        }
+        logs.append(renderProcessLog(step: "拉取远端引用（fetch）", result: fetch))
 
         let pull = try runner.run(
             command: "git",
             arguments: ["pull", "--rebase", "--autostash", project.gitRemote, project.publishBranch],
             in: project.rootURL
         )
-        if !pull.output.isEmpty {
-            logs.append(pull.output)
-        }
+        logs.append(renderProcessLog(step: "变基同步（pull --rebase）", result: pull))
 
         let status = try runner.run(
             command: "git",
             arguments: ["status", "--short", "--branch"],
             in: project.rootURL
         )
-        if !status.output.isEmpty {
-            logs.append(status.output)
-        }
+        logs.append(renderProcessLog(step: "同步后状态", result: status))
 
-        return logs.joined(separator: "\n")
+        return logs.joined(separator: "\n\n")
     }
 
     func diagnosePublishEnvironment(project: BlogProject, remoteURL: String) throws -> String {
@@ -209,7 +189,7 @@ final class PublishService {
         }
     }
 
-    private func ensureRemoteURL(project: BlogProject, remoteURL: String) -> String {
+    private func ensureRemoteURLLogs(project: BlogProject, remoteURL: String) -> [String] {
         do {
             _ = try runner.run(
                 command: "git",
@@ -221,7 +201,7 @@ final class PublishService {
                 arguments: ["remote", "set-url", project.gitRemote, remoteURL],
                 in: project.rootURL
             )
-            return result.output
+            return [renderProcessLog(step: "更新远端地址", result: result)]
         } catch {
             do {
                 let result = try runner.run(
@@ -229,9 +209,9 @@ final class PublishService {
                     arguments: ["remote", "add", project.gitRemote, remoteURL],
                     in: project.rootURL
                 )
-                return result.output
+                return [renderProcessLog(step: "添加远端地址", result: result)]
             } catch {
-                return ""
+                return ["== 配置远端地址 ==\n失败：\(error.localizedDescription)"]
             }
         }
     }
@@ -246,6 +226,27 @@ final class PublishService {
             ":(exclude).hugodesk.local.json"
         ])
         return try runner.run(command: "git", arguments: arguments, in: project.rootURL)
+    }
+
+    private func renderProcessLog(step: String, result: ProcessResult) -> String {
+        var lines: [String] = []
+        lines.append("== \(step) ==")
+        lines.append("命令：\(result.commandLine)")
+        lines.append("目录：\(result.workingDirectory)")
+        lines.append("退出码：\(result.exitCode)")
+        lines.append(String(format: "耗时：%.2fs", result.duration))
+
+        if !result.stdout.isEmpty {
+            lines.append("-- stdout --")
+            lines.append(result.stdout)
+        }
+
+        if !result.stderr.isEmpty {
+            lines.append("-- stderr --")
+            lines.append(result.stderr)
+        }
+
+        return lines.joined(separator: "\n")
     }
 
     private func containsTLSError(_ output: String) -> Bool {
