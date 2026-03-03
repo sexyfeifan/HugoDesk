@@ -37,9 +37,21 @@ enum ProcessRunnerError: LocalizedError {
 }
 
 final class ProcessRunner {
-    func run(command: String, arguments: [String], in cwd: URL) throws -> ProcessResult {
+    func run(
+        command: String,
+        arguments: [String],
+        in cwd: URL,
+        environment: [String: String] = [:]
+    ) throws -> ProcessResult {
         let process = Process()
         process.currentDirectoryURL = cwd
+        if !environment.isEmpty {
+            var merged = ProcessInfo.processInfo.environment
+            for (key, value) in environment {
+                merged[key] = value
+            }
+            process.environment = merged
+        }
 
         if command.contains("/") {
             process.executableURL = URL(fileURLWithPath: command)

@@ -25,6 +25,7 @@ swift run
 - 🧰 Expanded context-menu and selection markdown tools (H1-H6, table, details, footnote, divider)
 - 🖼️ Improved preview local-image resolution for `images/...`, `static/...`, and `./images/...`
 - 📦 Publish console now saves project config bundle directly instead of writing unrelated theme settings
+- 🔐 Publish/sync/diagnostics now support GitHub token authentication without exposing token in logs
 
 ## Artifact Layout
 

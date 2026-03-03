@@ -271,7 +271,8 @@ final class AppViewModel: ObservableObject {
         runTask(operation: "同步远端", successStatus: "已与远端分支同步。") {
             let output = try self.publishService.syncWithRemote(
                 project: self.project,
-                remoteURL: self.publishRemoteURL
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
             )
             return output.isEmpty ? "同步完成（无输出）。" : output
         }
@@ -290,7 +291,8 @@ final class AppViewModel: ObservableObject {
             let output = try self.publishService.commitAndPush(
                 project: self.project,
                 message: self.publishMessage,
-                remoteURL: self.publishRemoteURL
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
             )
 
             if fixed.changedLinks > 0 {
@@ -366,7 +368,8 @@ final class AppViewModel: ObservableObject {
         runTask(operation: "一键检测推送能力", successStatus: "发布环境检测完成。") {
             let report = try self.publishService.diagnosePublishEnvironment(
                 project: self.project,
-                remoteURL: self.publishRemoteURL
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
             )
             return report
         }

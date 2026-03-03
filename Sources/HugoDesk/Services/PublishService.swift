@@ -23,8 +23,9 @@ final class PublishService {
         return renderProcessLog(step: "查看 Git 状态", result: result)
     }
 
-    func commitAndPush(project: BlogProject, message: String, remoteURL: String) throws -> String {
+    func commitAndPush(project: BlogProject, message: String, remoteURL: String, githubToken: String = "") throws -> String {
         var logs: [String] = []
+        let tokenEnv = gitEnvironment(githubToken: githubToken)
 
         let unresolved = unresolvedConflictFiles(project: project)
         if !unresolved.isEmpty {
@@ -72,20 +73,22 @@ final class PublishService {
             let push = try runner.run(
                 command: "git",
                 arguments: ["push", project.gitRemote, project.publishBranch],
-                in: project.rootURL
+                in: project.rootURL,
+                environment: tokenEnv
             )
             logs.append(renderProcessLog(step: "推送到远端", result: push))
         } catch let ProcessRunnerError.commandFailed(_, _, output) {
             if containsNonFastForward(output) {
                 logs.append("== 推送到远端 ==\nPush 被拒绝（non-fast-forward），已自动执行同步后重试。")
-                let syncOutput = try syncWithRemote(project: project, remoteURL: remoteURL)
+                let syncOutput = try syncWithRemote(project: project, remoteURL: remoteURL, githubToken: githubToken)
                 if !syncOutput.isEmpty {
                     logs.append(syncOutput)
                 }
                 let retryPush = try runner.run(
                     command: "git",
                     arguments: ["push", project.gitRemote, project.publishBranch],
-                    in: project.rootURL
+                    in: project.rootURL,
+                    environment: tokenEnv
                 )
                 logs.append(renderProcessLog(step: "重试推送到远端", result: retryPush))
             } else {
@@ -96,8 +99,9 @@ final class PublishService {
         return logs.joined(separator: "\n\n")
     }
 
-    func syncWithRemote(project: BlogProject, remoteURL: String) throws -> String {
+    func syncWithRemote(project: BlogProject, remoteURL: String, githubToken: String = "") throws -> String {
         var logs: [String] = []
+        let tokenEnv = gitEnvironment(githubToken: githubToken)
 
         if !remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
@@ -106,14 +110,16 @@ final class PublishService {
         let fetch = try runner.run(
             command: "git",
             arguments: ["fetch", project.gitRemote, project.publishBranch],
-            in: project.rootURL
+            in: project.rootURL,
+            environment: tokenEnv
         )
         logs.append(renderProcessLog(step: "拉取远端引用（fetch）", result: fetch))
 
         let pull = try runner.run(
             command: "git",
             arguments: ["pull", "--rebase", "--autostash", project.gitRemote, project.publishBranch],
-            in: project.rootURL
+            in: project.rootURL,
+            environment: tokenEnv
         )
         logs.append(renderProcessLog(step: "变基同步（pull --rebase）", result: pull))
 
@@ -127,8 +133,9 @@ final class PublishService {
         return logs.joined(separator: "\n\n")
     }
 
-    func diagnosePublishEnvironment(project: BlogProject, remoteURL: String) throws -> String {
+    func diagnosePublishEnvironment(project: BlogProject, remoteURL: String, githubToken: String = "") throws -> String {
         var lines: [String] = []
+        let tokenEnv = gitEnvironment(githubToken: githubToken)
 
         lines.append("== 组件检查 ==")
         let git = toolStatus(name: "git", versionArgs: ["--version"], cwd: project.rootURL)
@@ -175,10 +182,20 @@ final class PublishService {
             }
         }
 
-        let remoteProbe = capture(command: "git", arguments: ["ls-remote", remoteTarget, "HEAD"], in: project.rootURL)
+        let remoteProbe = capture(
+            command: "git",
+            arguments: ["ls-remote", remoteTarget, "HEAD"],
+            in: project.rootURL,
+            environment: tokenEnv
+        )
         lines.append(renderCheck(title: "远程可达性（git ls-remote）", result: remoteProbe))
 
-        let dryRun = capture(command: "git", arguments: ["push", "--dry-run", remoteTarget, project.publishBranch], in: project.rootURL)
+        let dryRun = capture(
+            command: "git",
+            arguments: ["push", "--dry-run", remoteTarget, project.publishBranch],
+            in: project.rootURL,
+            environment: tokenEnv
+        )
         lines.append(renderCheck(title: "推送权限（git push --dry-run）", result: dryRun))
 
         if containsTLSError(remoteProbe.output) || containsTLSError(dryRun.output) {
@@ -445,15 +462,33 @@ final class PublishService {
         return nil
     }
 
-    private func capture(command: String, arguments: [String], in cwd: URL) -> CommandCapture {
+    private func capture(
+        command: String,
+        arguments: [String],
+        in cwd: URL,
+        environment: [String: String] = [:]
+    ) -> CommandCapture {
         do {
-            let result = try runner.run(command: command, arguments: arguments, in: cwd)
+            let result = try runner.run(command: command, arguments: arguments, in: cwd, environment: environment)
             return CommandCapture(success: true, output: sanitizeOutput(result.output))
         } catch let ProcessRunnerError.commandFailed(_, _, output) {
             return CommandCapture(success: false, output: sanitizeOutput(output))
         } catch {
             return CommandCapture(success: false, output: sanitizeOutput(error.localizedDescription))
         }
+    }
+
+    private func gitEnvironment(githubToken: String) -> [String: String] {
+        let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            return [:]
+        }
+        let raw = "x-access-token:\(token)"
+        let encoded = Data(raw.utf8).base64EncodedString()
+        return [
+            "GIT_HTTP_EXTRAHEADER": "AUTHORIZATION: basic \(encoded)",
+            "GIT_TERMINAL_PROMPT": "0"
+        ]
     }
 
     private func sanitizeOutput(_ raw: String) -> String {
