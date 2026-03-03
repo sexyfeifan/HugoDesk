@@ -1,6 +1,8 @@
 import Foundation
 
 struct BlogProject: Codable {
+    static let lastRootPathDefaultsKey = "hugodesk.lastProjectRootPath"
+
     var rootPath: String
     var hugoExecutable: String
     var contentSubpath: String
@@ -8,6 +10,15 @@ struct BlogProject: Codable {
     var publishBranch: String
 
     static func bootstrap() -> BlogProject {
+        if let cachedRoot = UserDefaults.standard.string(forKey: lastRootPathDefaultsKey),
+           !cachedRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let cachedURL = URL(fileURLWithPath: cachedRoot, isDirectory: true)
+            let cachedConfig = cachedURL.appendingPathComponent("hugo.toml")
+            if FileManager.default.fileExists(atPath: cachedConfig.path) {
+                return BlogProject(rootPath: cachedURL.path, hugoExecutable: "hugo", contentSubpath: "content/post", gitRemote: "origin", publishBranch: "main")
+            }
+        }
+
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let direct = cwd.appendingPathComponent("hugo.toml")
         let parent = cwd.deletingLastPathComponent()

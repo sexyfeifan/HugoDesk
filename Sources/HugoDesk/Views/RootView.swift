@@ -30,8 +30,8 @@ struct RootView: View {
                     Button("重新加载") {
                         viewModel.loadAll()
                     }
-                    Button("保存配置") {
-                        viewModel.saveThemeConfig()
+                    Button("保存项目配置") {
+                        viewModel.exportConfigBundleToProject()
                     }
                 }
                 .padding(.horizontal, 14)

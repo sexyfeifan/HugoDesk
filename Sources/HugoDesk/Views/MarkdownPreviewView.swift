@@ -81,33 +81,44 @@ struct MarkdownPreviewView: View {
 
     private func resolveLocalImageURL(_ rawLink: String) -> URL? {
         let link = cleanedMarkdownLink(rawLink)
+        let normalized = link.hasPrefix("./") ? String(link.dropFirst(2)) : link
         if link.hasPrefix("http://") || link.hasPrefix("https://") || link.hasPrefix("data:") {
             return nil
         }
 
-        if link.hasPrefix("/") {
-            if link.hasPrefix("/images/") {
-                let rel = String(link.dropFirst())
+        if normalized.hasPrefix("/") {
+            if normalized.hasPrefix("/images/") {
+                let rel = String(normalized.dropFirst())
                 return project.rootURL
                     .appendingPathComponent("static", isDirectory: true)
                     .appendingPathComponent(rel)
             }
-            if link.hasPrefix("/static/") {
-                return project.rootURL.appendingPathComponent(String(link.dropFirst()))
+            if normalized.hasPrefix("/static/") {
+                return project.rootURL.appendingPathComponent(String(normalized.dropFirst()))
             }
-            return URL(fileURLWithPath: link)
+            return URL(fileURLWithPath: normalized)
         }
 
-        if link.hasPrefix("~/") {
-            let expanded = NSString(string: link).expandingTildeInPath
+        if normalized.hasPrefix("images/") {
+            return project.rootURL
+                .appendingPathComponent("static", isDirectory: true)
+                .appendingPathComponent(normalized)
+        }
+
+        if normalized.hasPrefix("static/") {
+            return project.rootURL.appendingPathComponent(normalized)
+        }
+
+        if normalized.hasPrefix("~/") {
+            let expanded = NSString(string: normalized).expandingTildeInPath
             return URL(fileURLWithPath: expanded)
         }
 
-        if link.hasPrefix("file://") {
-            return URL(string: link)
+        if normalized.hasPrefix("file://") {
+            return URL(string: normalized)
         }
 
-        return postFileURL.deletingLastPathComponent().appendingPathComponent(link)
+        return postFileURL.deletingLastPathComponent().appendingPathComponent(normalized)
     }
 
     private func cleanedMarkdownLink(_ rawLink: String) -> String {

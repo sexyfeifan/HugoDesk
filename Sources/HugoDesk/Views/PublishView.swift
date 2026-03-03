@@ -101,8 +101,8 @@ struct PublishView: View {
                             .textFieldStyle(.roundedBorder)
 
                         HStack {
-                            Button("保存配置") {
-                                viewModel.saveThemeConfig()
+                            Button("保存发布配置") {
+                                viewModel.exportConfigBundleToProject()
                             }
                             Button("构建站点") {
                                 viewModel.runBuild()

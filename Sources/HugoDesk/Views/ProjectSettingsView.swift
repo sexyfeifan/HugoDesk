@@ -19,10 +19,15 @@ struct ProjectSettingsView: View {
                             HStack {
                                 TextField("例如：/Users/you/Hugo", text: $viewModel.project.rootPath)
                                     .textFieldStyle(.roundedBorder)
+                                    .onSubmit {
+                                        viewModel.setProjectRootPath(viewModel.project.rootPath)
+                                    }
+                                Button("应用目录") {
+                                    viewModel.setProjectRootPath(viewModel.project.rootPath)
+                                }
                                 Button("选择") {
                                     if let path = pickDirectory() {
-                                        viewModel.project.rootPath = path
-                                        viewModel.loadAll()
+                                        viewModel.setProjectRootPath(path)
                                     }
                                 }
                             }

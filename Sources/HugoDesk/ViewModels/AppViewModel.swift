@@ -63,10 +63,28 @@ final class AppViewModel: ObservableObject {
             } else {
                 editorPost = BlogPost.empty(in: project.contentURL)
             }
+            persistProjectRootPath(project.rootPath)
             statusText = localBundleLoaded ? "项目已加载（已读取本地配置包）。" : "项目已加载。"
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    func setProjectRootPath(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            statusText = "博客根目录不能为空。"
+            return
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDirectory), isDirectory.boolValue else {
+            statusText = "目录不存在：\(trimmed)"
+            return
+        }
+
+        project.rootPath = URL(fileURLWithPath: trimmed, isDirectory: true).path
+        loadAll()
     }
 
     func saveRemoteProfile() {
@@ -506,6 +524,14 @@ final class AppViewModel: ObservableObject {
         project.contentSubpath = source.contentSubpath
         project.gitRemote = source.gitRemote
         project.publishBranch = source.publishBranch
+    }
+
+    private func persistProjectRootPath(_ path: String) {
+        let normalized = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return
+        }
+        UserDefaults.standard.set(normalized, forKey: BlogProject.lastRootPathDefaultsKey)
     }
 
     func clearPublishLogs() {

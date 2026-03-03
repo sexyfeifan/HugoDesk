@@ -19,12 +19,12 @@ swift run
 - AI formatting workflow (configurable API endpoint/model/key)
 - Release diagnostics with non-fast-forward detection and sync guidance
 
-## What's New ✨ (v0.3.6)
+## What's New ✨ (v0.3.7)
 
-- 🧯 Added pre-publish Git conflict detection and explicit conflict resolution guidance in logs
-- 🚫 Publish continues excluding `hugo.toml` / `.hugodesk.local.json` / HugoDesk directories
-- 🧱 Kept ignored-file fallback for `git add` to avoid false-stop on `.gitignore` advice
-- 🧼 Preflight now shows `Git 冲突` status to block broken commits earlier
+- 🧭 Persisted last selected blog root path to avoid running commands in the wrong directory after app restart
+- 🧰 Expanded context-menu and selection markdown tools (H1-H6, table, details, footnote, divider)
+- 🖼️ Improved preview local-image resolution for `images/...`, `static/...`, and `./images/...`
+- 📦 Publish console now saves project config bundle directly instead of writing unrelated theme settings
 
 ## Artifact Layout
 

@@ -297,8 +297,10 @@ private final class ContextMenuTextView: NSTextView {
         }
 
         let contextActions: [MarkdownAction] = [
-            .heading1, .heading2, .heading3, .bold, .italic, .strike, .inlineCode,
-            .link, .image, .quote, .bulletList, .orderedList, .taskList, .codeBlock, .footnote
+            .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
+            .bold, .italic, .strike, .inlineCode,
+            .link, .image, .quote, .bulletList, .orderedList, .taskList,
+            .codeBlock, .table, .footnote, .details, .divider
         ]
 
         for action in contextActions {
@@ -332,6 +334,9 @@ struct MarkdownTextEditor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ContextMenuTextView(frame: .zero)
         textView.delegate = context.coordinator
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.allowsUndo = true
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false

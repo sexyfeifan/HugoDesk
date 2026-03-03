@@ -21,9 +21,10 @@ struct EditorView: View {
     ]
 
     private let selectionTools: [MarkdownAction] = [
-        .heading1, .heading2, .heading3,
+        .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
         .bold, .italic, .strike, .inlineCode,
-        .link, .quote, .bulletList, .orderedList, .taskList, .codeBlock
+        .link, .quote, .bulletList, .orderedList, .taskList, .codeBlock,
+        .table, .footnote, .divider
     ]
 
     var body: some View {
