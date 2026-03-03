@@ -26,6 +26,30 @@ final class PublishService {
     func commitAndPush(project: BlogProject, message: String, remoteURL: String) throws -> String {
         var logs: [String] = []
 
+        let unresolved = unresolvedConflictFiles(project: project)
+        if !unresolved.isEmpty {
+            let lines = unresolved.map { "- \($0)" }.joined(separator: "\n")
+            let detail = """
+            检测到未解决的 Git 冲突，无法继续提交。
+            当前项目目录：\(project.rootURL.path)
+
+            冲突文件：
+            \(lines)
+
+            建议先处理冲突后再发布：
+            - git status
+            - 打开冲突文件并解决 <<<<<<< ======= >>>>>>> 标记
+            - git add <冲突文件>
+            - git commit
+
+            若这是误操作合并，可执行：
+            - git merge --abort
+            或
+            - git rebase --abort
+            """
+            throw ProcessRunnerError.commandFailed(command: "git commit", code: 1, output: detail)
+        }
+
         if !remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
         }
@@ -187,6 +211,20 @@ final class PublishService {
         } catch {
             return ""
         }
+    }
+
+    func unresolvedConflictFiles(project: BlogProject) -> [String] {
+        let result = capture(
+            command: "git",
+            arguments: ["diff", "--name-only", "--diff-filter=U"],
+            in: project.rootURL
+        )
+        let output = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !output.isEmpty else { return [] }
+        return output
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 
     private func ensureRemoteURLLogs(project: BlogProject, remoteURL: String) -> [String] {

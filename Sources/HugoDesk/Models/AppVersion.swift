@@ -1,7 +1,7 @@
 import Foundation
 
 enum AppVersion {
-    static let codeVersion = "0.3.5"
+    static let codeVersion = "0.3.6"
 
     static var current: String {
         codeVersion

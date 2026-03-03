@@ -721,6 +721,15 @@ final class AppViewModel: ObservableObject {
             )
         )
 
+        let conflicts = publishService.unresolvedConflictFiles(project: project)
+        checks.append(
+            PublishCheck(
+                title: "Git 冲突",
+                detail: conflicts.isEmpty ? "未检测到未解决冲突。" : "检测到 \(conflicts.count) 个未解决冲突，请先处理。",
+                level: conflicts.isEmpty ? .ok : .error
+            )
+        )
+
         return checks
     }
 }
