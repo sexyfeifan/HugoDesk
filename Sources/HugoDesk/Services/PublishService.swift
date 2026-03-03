@@ -25,7 +25,9 @@ final class PublishService {
 
     func commitAndPush(project: BlogProject, message: String, remoteURL: String, githubToken: String = "") throws -> String {
         var logs: [String] = []
-        let tokenEnv = gitEnvironment(githubToken: githubToken)
+        let auth = try makeGitAuthContext(githubToken: githubToken)
+        defer { auth.cleanup() }
+        let tokenEnv = auth.environment
 
         let unresolved = unresolvedConflictFiles(project: project)
         if !unresolved.isEmpty {
@@ -101,7 +103,9 @@ final class PublishService {
 
     func syncWithRemote(project: BlogProject, remoteURL: String, githubToken: String = "") throws -> String {
         var logs: [String] = []
-        let tokenEnv = gitEnvironment(githubToken: githubToken)
+        let auth = try makeGitAuthContext(githubToken: githubToken)
+        defer { auth.cleanup() }
+        let tokenEnv = auth.environment
 
         if !remoteURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
@@ -135,7 +139,9 @@ final class PublishService {
 
     func diagnosePublishEnvironment(project: BlogProject, remoteURL: String, githubToken: String = "") throws -> String {
         var lines: [String] = []
-        let tokenEnv = gitEnvironment(githubToken: githubToken)
+        let auth = try makeGitAuthContext(githubToken: githubToken)
+        defer { auth.cleanup() }
+        let tokenEnv = auth.environment
 
         lines.append("== 组件检查 ==")
         let git = toolStatus(name: "git", versionArgs: ["--version"], cwd: project.rootURL)
@@ -478,17 +484,36 @@ final class PublishService {
         }
     }
 
-    private func gitEnvironment(githubToken: String) -> [String: String] {
+    private func makeGitAuthContext(githubToken: String) throws -> GitAuthContext {
         let token = githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {
-            return [:]
+            return GitAuthContext(environment: [:], cleanup: {})
         }
-        let raw = "x-access-token:\(token)"
-        let encoded = Data(raw.utf8).base64EncodedString()
-        return [
-            "GIT_HTTP_EXTRAHEADER": "AUTHORIZATION: basic \(encoded)",
-            "GIT_TERMINAL_PROMPT": "0"
-        ]
+
+        let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("hugodesk-askpass-\(UUID().uuidString).sh")
+        let script = """
+        #!/bin/sh
+        case "$1" in
+          *sername*) echo "x-access-token" ;;
+          *assword*) echo "$HUGODESK_GITHUB_TOKEN" ;;
+          *) echo "" ;;
+        esac
+        """
+        try script.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptURL.path)
+
+        return GitAuthContext(
+            environment: [
+                "GIT_ASKPASS": scriptURL.path,
+                "HUGODESK_GITHUB_TOKEN": token,
+                "GCM_INTERACTIVE": "Never",
+                "GIT_TERMINAL_PROMPT": "0"
+            ],
+            cleanup: {
+                try? FileManager.default.removeItem(at: scriptURL)
+            }
+        )
     }
 
     private func sanitizeOutput(_ raw: String) -> String {
@@ -509,4 +534,9 @@ private struct ToolStatus {
 private struct CommandCapture {
     var success: Bool
     var output: String
+}
+
+private struct GitAuthContext {
+    var environment: [String: String]
+    var cleanup: () -> Void
 }
