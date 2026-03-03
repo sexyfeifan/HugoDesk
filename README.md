@@ -19,13 +19,13 @@ swift run
 - AI formatting workflow (configurable API endpoint/model/key)
 - Release diagnostics with non-fast-forward detection and sync guidance
 
-## What's New ✨ (v0.3.2)
+## What's New ✨ (v0.3.3)
 
-- 🚚 Separated HugoDesk into standalone repository `sexyfeifan/HugoDesk`
-- 🔀 Blog-repo sync now excludes HugoDesk project content by default
-- 🧭 Improved release and artifact policy: source + dmg in GitHub Releases
-- 🧩 Updated app icon pipeline and packaging flow for current version
-- 🧪 Added pre-push token scan step to avoid leaking plaintext credentials
+- 🧱 Added publish guardrails: `git add` now excludes `HugoDesk/`, `HugoDeskArchive/`, and `.hugodesk.local.json`
+- 🚚 HugoDesk is now managed in standalone repo `sexyfeifan/HugoDesk`
+- 🔀 Blog sync semantics aligned to Hugo content only (no HugoDesk artifacts)
+- 🧩 Updated app icon and packaging pipeline for current version artifacts
+- 🧪 Added release-time token scan to avoid plaintext credential leaks
 
 ## Artifact Layout
 

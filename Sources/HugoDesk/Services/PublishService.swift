@@ -33,7 +33,7 @@ final class PublishService {
             }
         }
 
-        let add = try runner.run(command: "git", arguments: ["add", "."], in: project.rootURL)
+        let add = try stagePublishFiles(project: project)
         if !add.output.isEmpty {
             logs.append(add.output)
         }
@@ -234,6 +234,18 @@ final class PublishService {
                 return ""
             }
         }
+    }
+
+    private func stagePublishFiles(project: BlogProject) throws -> ProcessResult {
+        var arguments = ["add", "--all", "--", "."]
+        arguments.append(contentsOf: [
+            ":(exclude)HugoDesk",
+            ":(exclude)HugoDesk/**",
+            ":(exclude)HugoDeskArchive",
+            ":(exclude)HugoDeskArchive/**",
+            ":(exclude).hugodesk.local.json"
+        ])
+        return try runner.run(command: "git", arguments: arguments, in: project.rootURL)
     }
 
     private func containsTLSError(_ output: String) -> Bool {
