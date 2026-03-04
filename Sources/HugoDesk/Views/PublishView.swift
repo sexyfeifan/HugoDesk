@@ -35,13 +35,6 @@ struct PublishView: View {
                             .textFieldStyle(.roundedBorder)
                         SecureField("GitHub Token（可选，推荐）", text: $viewModel.githubToken)
                             .textFieldStyle(.roundedBorder)
-                        Picker("部署模式", selection: $viewModel.deploymentMode) {
-                            ForEach(PublishDeploymentMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        Toggle("推送时排除 hugo.toml（不推荐）", isOn: $viewModel.excludeHugoConfigOnPublish)
 
                         HStack {
                             Button("保存查询配置") {
@@ -105,38 +98,25 @@ struct PublishView: View {
                     }
                 }
 
-                ModernCard(title: "发布控制台", subtitle: "构建、检查、提交、推送") {
+                ModernCard(title: "发布控制台", subtitle: "同步、检测、提交并推送") {
                     VStack(alignment: .leading, spacing: 10) {
                         TextField("提交信息", text: $viewModel.publishMessage)
                             .textFieldStyle(.roundedBorder)
 
                         HStack {
-                            Button("保存发布配置") {
-                                viewModel.exportConfigBundleToProject()
-                            }
-                            Button("构建站点") {
-                                viewModel.runBuild()
-                            }
-                            Button("查看 Git 状态") {
-                                viewModel.runGitStatus()
-                            }
                             Button("同步远程") {
                                 viewModel.runSyncWithRemote()
+                            }
+                            Button("一键检测推送与部署") {
+                                viewModel.runEnvironmentDiagnostics()
                             }
                             Button("提交并推送") {
                                 viewModel.runPublish()
                             }
-                        }
-
-                        Divider()
-
-                        HStack {
-                            Button("一键检测推送能力") {
-                                viewModel.runEnvironmentDiagnostics()
-                            }
                             Spacer()
                         }
-                        Text("检测会验证 git/hugo 可用性、远程可达性、dry-run 推送权限与 Pages 部署链路。发布时自动排除 HugoDesk/HugoDeskArchive/.hugodesk.local.json。hugo.toml 是否排除由上方开关控制。")
+
+                        Text("检测会验证 git/hugo 可用性、远程可达性、dry-run 推送权限与 Pages 部署链路。发布时自动排除 HugoDesk/HugoDeskArchive/.hugodesk.local.json，hugo.toml 始终随项目发布。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -162,7 +142,7 @@ struct PublishView: View {
                         }
 
                         if viewModel.publishLogEntries.isEmpty {
-                            Text("暂无日志。执行“构建/检测/推送”后会在这里显示进程与错误详情。")
+                            Text("暂无日志。执行“同步/检测/推送”后会在这里显示进程与错误详情。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {

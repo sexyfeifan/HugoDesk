@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ProjectSettingsView: View {
     @ObservedObject var viewModel: AppViewModel
@@ -127,14 +126,14 @@ struct ProjectSettingsView: View {
                         Button("重新加载项目") {
                             viewModel.loadAll()
                         }
-                        Button("保存项目配置包") {
+                        Button("保存远程与令牌") {
+                            viewModel.saveRemoteProfile()
+                        }
+                        Button("导出项目配置包") {
                             viewModel.exportConfigBundleToProject()
                         }
-                        Button("保存主题配置") {
-                            viewModel.saveThemeConfig()
-                        }
-                        Button("构建站点") {
-                            viewModel.runBuild()
+                        Button("从项目配置包还原") {
+                            viewModel.importConfigBundleFromProject()
                         }
                     }
                 }
@@ -151,19 +150,6 @@ struct ProjectSettingsView: View {
                             }
                             Button("一键从项目目录还原") {
                                 viewModel.importConfigBundleFromProject()
-                            }
-                            Spacer()
-                        }
-                        HStack {
-                            Button("另存为外部备份文件") {
-                                if let target = pickBackupSaveURL() {
-                                    viewModel.exportConfigBundle(to: target)
-                                }
-                            }
-                            Button("从外部备份文件还原") {
-                                if let source = pickBackupFileURL() {
-                                    viewModel.importConfigBundle(from: source)
-                                }
                             }
                             Spacer()
                         }
@@ -184,24 +170,5 @@ struct ProjectSettingsView: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "选择"
         return panel.runModal() == .OK ? panel.url?.path : nil
-    }
-
-    private func pickBackupSaveURL() -> URL? {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "hugodesk-config-backup.json"
-        panel.prompt = "导出"
-        panel.canCreateDirectories = true
-        return panel.runModal() == .OK ? panel.url : nil
-    }
-
-    private func pickBackupFileURL() -> URL? {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.json]
-        panel.prompt = "导入"
-        return panel.runModal() == .OK ? panel.url : nil
     }
 }

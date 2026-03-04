@@ -14,22 +14,11 @@ final class PublishService {
         return renderProcessLog(step: "构建 Hugo 站点", result: result)
     }
 
-    func gitStatus(project: BlogProject) throws -> String {
-        let result = try runner.run(
-            command: "git",
-            arguments: ["status", "--short", "--branch"],
-            in: project.rootURL
-        )
-        return renderProcessLog(step: "查看 Git 状态", result: result)
-    }
-
     func commitAndPush(
         project: BlogProject,
         message: String,
         remoteURL: String,
-        githubToken: String = "",
-        deploymentMode: PublishDeploymentMode = .githubActions,
-        excludeHugoConfigOnPublish: Bool = false
+        githubToken: String = ""
     ) throws -> String {
         var logs: [String] = []
         let auth = try makeGitAuthContext(githubToken: githubToken)
@@ -64,18 +53,16 @@ final class PublishService {
             logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
         }
 
-        let add = try stagePublishFiles(project: project, excludeHugoConfigOnPublish: excludeHugoConfigOnPublish)
+        let add = try stagePublishFiles(project: project)
         logs.append(renderProcessLog(step: "暂存变更", result: add))
 
-        if deploymentMode == .githubActions {
-            let workflowExists = hasGitHubPagesWorkflow(project: project)
-            if !workflowExists {
-                logs.append("""
-                == 部署模式提示 ==
-                当前为 GitHub Actions 部署，但未检测到 .github/workflows/hugo.yaml。
-                请先在发布页点击“一键生成 Pages Workflow”，再执行提交推送。
-                """)
-            }
+        let workflowExists = hasGitHubPagesWorkflow(project: project)
+        if !workflowExists {
+            logs.append("""
+            == 部署链路提示 ==
+            未检测到 .github/workflows/hugo.yaml，推送源码后 GitHub Pages 不会自动构建站点。
+            请先在发布页点击“一键生成 Pages Workflow”，再执行提交推送。
+            """)
         }
 
         do {
@@ -158,9 +145,7 @@ final class PublishService {
     func diagnosePublishEnvironment(
         project: BlogProject,
         remoteURL: String,
-        githubToken: String = "",
-        deploymentMode: PublishDeploymentMode = .githubActions,
-        excludeHugoConfigOnPublish: Bool = false
+        githubToken: String = ""
     ) throws -> String {
         var lines: [String] = []
         let auth = try makeGitAuthContext(githubToken: githubToken)
@@ -234,20 +219,10 @@ final class PublishService {
         lines.append(workflowExists
             ? "✅ GitHub Pages Workflow：已检测到 .github/workflows/hugo.yaml"
             : "❌ GitHub Pages Workflow：未检测到 .github/workflows/hugo.yaml")
-        lines.append("部署模式：\(deploymentMode.title)")
-        if excludeHugoConfigOnPublish {
-            lines.append("⚠️ 当前设置为“推送时排除 hugo.toml”，若依赖 Actions 构建将导致部署失败。")
-            lines.append("修复建议：关闭该选项，重新提交并推送。")
-        }
-
-        if deploymentMode == .githubActions, !workflowExists {
+        lines.append("部署策略：GitHub Actions（固定）")
+        if !workflowExists {
             lines.append("⚠️ 当前使用 GitHub Actions 模式，但 workflow 缺失。")
             lines.append("修复建议：在应用发布页点击“一键生成 Pages Workflow”，然后重新推送。")
-        }
-
-        if deploymentMode == .directSourcePush, isGitHubPagesRepository(remoteTarget) {
-            lines.append("⚠️ 仓库看起来是 GitHub Pages 站点（*.github.io），仅推送源码不会直接生成站点页面。")
-            lines.append("建议切换到“GitHub Actions（推荐）”模式，或改用专门的静态产物部署仓库。")
         }
 
         if containsTLSError(remoteProbe.output) || containsTLSError(dryRun.output) {
@@ -323,9 +298,9 @@ final class PublishService {
         }
     }
 
-    private func stagePublishFiles(project: BlogProject, excludeHugoConfigOnPublish: Bool) throws -> ProcessResult {
+    private func stagePublishFiles(project: BlogProject) throws -> ProcessResult {
         let baseArguments = ["add", "--all", "--", "."]
-        var commonExcludes = [
+        let commonExcludes = [
             ":(exclude)HugoDesk",
             ":(exclude)HugoDesk/**",
             ":(exclude)HugoDeskArchive",
@@ -335,10 +310,6 @@ final class PublishService {
             ":(glob,exclude)**/HugoDeskArchive",
             ":(glob,exclude)**/HugoDeskArchive/**"
         ]
-        if excludeHugoConfigOnPublish {
-            commonExcludes.append(":(exclude)hugo.toml")
-            commonExcludes.append(":(glob,exclude)**/hugo.toml")
-        }
         let localBundleExcludes = [
             ":(exclude).hugodesk.local.json",
             ":(glob,exclude)**/.hugodesk.local.json"
@@ -651,10 +622,6 @@ final class PublishService {
             .appendingPathComponent("hugo.yaml", isDirectory: false)
     }
 
-    private func isGitHubPagesRepository(_ remoteTarget: String) -> Bool {
-        let text = remoteTarget.lowercased()
-        return text.contains("github.io.git") || text.contains("github.io")
-    }
 }
 
 private struct ToolStatus {

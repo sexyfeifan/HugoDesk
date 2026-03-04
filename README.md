@@ -15,11 +15,11 @@ swift run
 - New post workflow with filename-from-title generation and metadata helpers
 - Theme settings editor for `github-style`
 - Image import and auto image-link normalization before publish
-- Git build/status/publish workflow and GitHub Actions status check
+- Git sync/publish workflow and GitHub Actions status check
 - AI formatting workflow (configurable API endpoint/model/key)
 - Release diagnostics with non-fast-forward detection and sync guidance
 
-## What's New ✨ (v0.3.8)
+## What's New ✨ (v0.3.9)
 
 - 🧭 Persisted last selected blog root path to avoid running commands in the wrong directory after app restart
 - 🧰 Expanded context-menu and selection markdown tools (H1-H6, table, details, footnote, divider)
@@ -27,7 +27,8 @@ swift run
 - 📦 Publish console now saves project config bundle directly instead of writing unrelated theme settings
 - 🔐 Publish/sync/diagnostics now support GitHub token authentication without exposing token in logs
 - 🚀 Added one-click GitHub Pages workflow bootstrap and deployment-chain diagnostics
-- ⚙️ Added publish strategy options (`GitHub Actions` recommended) and `hugo.toml` include/exclude switch
+- ✂️ Simplified publish console and project quick actions to keep only core Hugo publish steps
+- ✅ `hugo.toml` is always included in publish commits (removed exclude option)
 
 ## Artifact Layout
 

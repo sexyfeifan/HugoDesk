@@ -21,8 +21,6 @@ final class AppViewModel: ObservableObject {
     @Published var publishRemoteURL: String = ""
     @Published var githubToken: String = ""
     @Published var workflowName: String = "Deploy Hugo site to Pages"
-    @Published var deploymentMode: PublishDeploymentMode = .githubActions
-    @Published var excludeHugoConfigOnPublish: Bool = false
     @Published var aiBaseURL: String = AIProfile.default.baseURL
     @Published var aiModel: String = AIProfile.default.model
     @Published var aiAPIKey: String = ""
@@ -93,9 +91,7 @@ final class AppViewModel: ObservableObject {
         do {
             let profile = RemoteProfile(
                 remoteURL: publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines),
-                deploymentMode: deploymentMode,
-                excludeHugoConfigOnPublish: excludeHugoConfigOnPublish
+                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines)
             )
             try credentialStore.saveRemoteProfile(profile, for: project.rootPath)
             credentialStore.saveToken(githubToken, for: project.rootPath)
@@ -264,13 +260,6 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func runGitStatus() {
-        runTask(operation: "查看 Git 状态", successStatus: "Git 状态已更新。") {
-            let output = try self.publishService.gitStatus(project: self.project)
-            return output.isEmpty ? "Git 状态为空。" : output
-        }
-    }
-
     func runSyncWithRemote() {
         runTask(operation: "同步远端", successStatus: "已与远端分支同步。") {
             let output = try self.publishService.syncWithRemote(
@@ -296,9 +285,7 @@ final class AppViewModel: ObservableObject {
                 project: self.project,
                 message: self.publishMessage,
                 remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken,
-                deploymentMode: self.deploymentMode,
-                excludeHugoConfigOnPublish: self.excludeHugoConfigOnPublish
+                githubToken: self.githubToken
             )
 
             if fixed.changedLinks > 0 {
@@ -375,9 +362,7 @@ final class AppViewModel: ObservableObject {
             let report = try self.publishService.diagnosePublishEnvironment(
                 project: self.project,
                 remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken,
-                deploymentMode: self.deploymentMode,
-                excludeHugoConfigOnPublish: self.excludeHugoConfigOnPublish
+                githubToken: self.githubToken
             )
             return report
         }
@@ -418,30 +403,6 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func exportConfigBundle(to url: URL) {
-        do {
-            let bundle = makeConfigBundleSnapshot()
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(bundle)
-            try data.write(to: url, options: .atomic)
-            statusText = "配置包已导出：\(url.path)"
-        } catch {
-            statusText = "导出失败：\(error.localizedDescription)"
-        }
-    }
-
-    func importConfigBundle(from url: URL) {
-        do {
-            let bundle = try loadConfigBundle(from: url)
-            try restoreConfigBundle(bundle, sourceName: url.lastPathComponent, persistToProjectBundle: true)
-            statusText = "配置包已还原：\(url.lastPathComponent)"
-        } catch {
-            statusText = "还原失败：\(error.localizedDescription)"
-        }
-    }
-
     private func makeConfigBundleSnapshot() -> ConfigBackupBundle {
         ConfigBackupBundle(
             exportedAt: Date(),
@@ -449,9 +410,7 @@ final class AppViewModel: ObservableObject {
             themeConfig: config,
             remoteProfile: RemoteProfile(
                 remoteURL: publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines),
-                deploymentMode: deploymentMode,
-                excludeHugoConfigOnPublish: excludeHugoConfigOnPublish
+                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines)
             ),
             githubToken: githubToken,
             aiProfile: AIProfile(
@@ -487,8 +446,6 @@ final class AppViewModel: ObservableObject {
         config = bundle.themeConfig
         publishRemoteURL = bundle.remoteProfile.remoteURL
         workflowName = bundle.remoteProfile.workflowName.isEmpty ? defaultWorkflowName : bundle.remoteProfile.workflowName
-        deploymentMode = bundle.remoteProfile.deploymentMode
-        excludeHugoConfigOnPublish = bundle.remoteProfile.excludeHugoConfigOnPublish
         githubToken = bundle.githubToken
         aiBaseURL = bundle.aiProfile.baseURL.isEmpty ? AIProfile.default.baseURL : bundle.aiProfile.baseURL
         aiModel = bundle.aiProfile.model.isEmpty ? AIProfile.default.model : bundle.aiProfile.model
@@ -530,8 +487,6 @@ final class AppViewModel: ObservableObject {
             applyProjectSettings(from: bundle.project)
             publishRemoteURL = bundle.remoteProfile.remoteURL
             workflowName = bundle.remoteProfile.workflowName.isEmpty ? defaultWorkflowName : bundle.remoteProfile.workflowName
-            deploymentMode = bundle.remoteProfile.deploymentMode
-            excludeHugoConfigOnPublish = bundle.remoteProfile.excludeHugoConfigOnPublish
             githubToken = bundle.githubToken.isEmpty ? credentialStore.loadToken(for: project.rootPath) : bundle.githubToken
             aiBaseURL = bundle.aiProfile.baseURL.isEmpty ? AIProfile.default.baseURL : bundle.aiProfile.baseURL
             aiModel = bundle.aiProfile.model.isEmpty ? AIProfile.default.model : bundle.aiProfile.model
@@ -705,13 +660,9 @@ final class AppViewModel: ObservableObject {
         if let profile = credentialStore.loadRemoteProfile(for: project.rootPath) {
             publishRemoteURL = profile.remoteURL
             workflowName = profile.workflowName.isEmpty ? defaultWorkflowName : profile.workflowName
-            deploymentMode = profile.deploymentMode
-            excludeHugoConfigOnPublish = profile.excludeHugoConfigOnPublish
         } else {
             publishRemoteURL = publishService.detectRemoteURL(project: project)
             workflowName = defaultWorkflowName
-            deploymentMode = .githubActions
-            excludeHugoConfigOnPublish = false
         }
         githubToken = credentialStore.loadToken(for: project.rootPath)
     }
@@ -776,23 +727,15 @@ final class AppViewModel: ObservableObject {
             PublishCheck(
                 title: "Pages Workflow",
                 detail: workflowExists ? "已检测到 .github/workflows/hugo.yaml。" : "未检测到 .github/workflows/hugo.yaml。",
-                level: workflowExists ? .ok : (deploymentMode == .githubActions ? .error : .warning)
+                level: workflowExists ? .ok : .error
             )
         )
 
         checks.append(
             PublishCheck(
-                title: "部署模式",
-                detail: deploymentMode.title,
+                title: "部署策略",
+                detail: "GitHub Actions（固定）",
                 level: .ok
-            )
-        )
-
-        checks.append(
-            PublishCheck(
-                title: "hugo.toml 推送",
-                detail: excludeHugoConfigOnPublish ? "当前排除 hugo.toml（不推荐）。" : "已包含 hugo.toml。",
-                level: excludeHugoConfigOnPublish ? .warning : .ok
             )
         )
 
