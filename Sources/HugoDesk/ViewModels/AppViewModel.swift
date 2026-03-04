@@ -349,6 +349,108 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func runGuidedPublishWorkflow() {
+        runAsyncTask(operation: "一键发布工作流", successStatus: "一键发布流程完成。") {
+            var logs: [String] = []
+
+            let structure = self.publishService.checkHugoStructure(project: self.project)
+            self.lastHugoStructureReport = structure
+            guard !structure.hasMissingItems else {
+                self.showHugoStructureRepairPrompt = true
+                throw PublishWorkflowError.missingStructure(items: structure.missingItemsForPrompt)
+            }
+            logs.append(structure.renderCheckLog())
+
+            if self.publishService.hasGitHubPagesWorkflow(project: self.project) {
+                logs.append("== Pages Workflow ==\n已检测到 .github/workflows/hugo.yaml")
+            } else {
+                let workflow = try self.publishService.ensureGitHubPagesWorkflow(project: self.project)
+                logs.append("== 自动补齐 Pages Workflow ==\n\(workflow)")
+            }
+
+            let remote = self.publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let token = self.githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !remote.isEmpty, !token.isEmpty {
+                do {
+                    var pages = try await self.pagesService.fetchSiteStatus(remoteURL: remote, token: token)
+                    logs.append("""
+                    == 检查 Pages 来源 ==
+                    build_type: \(pages.buildType)
+                    source: \(pages.sourceDescription)
+                    访问地址: \(pages.htmlURL)
+                    """)
+                    if pages.buildType.lowercased() != "workflow" {
+                        pages = try await self.pagesService.switchToWorkflowBuild(
+                            remoteURL: remote,
+                            token: token,
+                            branch: self.project.publishBranch
+                        )
+                        logs.append("""
+                        == 修复 Pages 来源 ==
+                        build_type: \(pages.buildType)
+                        source: \(pages.sourceDescription)
+                        访问地址: \(pages.htmlURL)
+                        """)
+                    }
+                    self.pagesSiteStatus = pages
+                    self.pagesSiteError = ""
+                } catch {
+                    self.pagesSiteError = error.localizedDescription
+                    logs.append("== 检查/修复 Pages 来源 ==\n警告：\(error.localizedDescription)")
+                }
+            } else {
+                logs.append("== 检查 Pages 来源 ==\n跳过：未配置远程地址或 GitHub Token。")
+            }
+
+            let build = try self.publishService.runHugoBuild(project: self.project)
+            logs.append(build)
+
+            let sync = try self.publishService.syncWithRemote(
+                project: self.project,
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
+            )
+            if !sync.isEmpty {
+                logs.append(sync)
+            }
+
+            let publish = try self.publishService.commitAndPush(
+                project: self.project,
+                message: self.publishMessage,
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
+            )
+            logs.append(publish)
+
+            if !remote.isEmpty, !token.isEmpty {
+                do {
+                    let run = try await self.actionsService.fetchLatestRun(
+                        remoteURL: remote,
+                        token: token,
+                        workflowName: self.workflowName
+                    )
+                    self.latestWorkflowStatus = run
+                    self.latestWorkflowError = ""
+                    logs.append("""
+                    == 最新 Actions 运行 ==
+                    Workflow: \(run.name)
+                    状态: \(run.statusText)
+                    分支: \(run.branch)
+                    提交: \(run.sha)
+                    详情: \(run.htmlURL)
+                    """)
+                } catch {
+                    self.latestWorkflowError = error.localizedDescription
+                    logs.append("== 最新 Actions 运行 ==\n警告：\(error.localizedDescription)")
+                }
+            } else {
+                logs.append("== 最新 Actions 运行 ==\n跳过：未配置远程地址或 GitHub Token。")
+            }
+
+            return logs.joined(separator: "\n\n")
+        }
+    }
+
     func refreshActionsStatus() {
         runAsyncTask(operation: "查询 Actions 状态", successStatus: "已获取最新 Actions 状态。") {
             self.latestWorkflowError = ""
@@ -921,6 +1023,23 @@ final class AppViewModel: ObservableObject {
         )
 
         return checks
+    }
+}
+
+private enum PublishWorkflowError: LocalizedError {
+    case missingStructure(items: [String])
+
+    var errorDescription: String? {
+        switch self {
+        case let .missingStructure(items):
+            if items.isEmpty {
+                return "Hugo 文件结构不完整，请先修复后再发布。"
+            }
+            return """
+            Hugo 文件结构不完整，请先修复后再发布：
+            \(items.map { "- \($0)" }.joined(separator: "\n"))
+            """
+        }
     }
 }
 

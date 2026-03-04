@@ -9,31 +9,17 @@ struct PublishView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ModernCard(title: "发布前检查", subtitle: "先检查再发布，减少失败率") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(viewModel.preflightChecks()) { check in
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: iconName(for: check.level))
-                                    .foregroundStyle(color(for: check.level))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(check.title)
-                                        .font(.subheadline.weight(.semibold))
-                                    Text(check.detail)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                ModernCard(title: "GitHub Actions 状态", subtitle: "显示最新 workflow 运行结果") {
+                ModernCard(title: "发布工作流", subtitle: "替代命令行：检查结构 → 构建验证 → 同步远端 → 推送 → 部署验证") {
                     VStack(alignment: .leading, spacing: 10) {
                         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                             GridRow {
                                 Text("仓库地址").foregroundStyle(.secondary)
                                 Text(viewModel.publishRemoteURL.isEmpty ? "未设置（请到项目页配置）" : viewModel.publishRemoteURL)
                                     .textSelection(.enabled)
+                            }
+                            GridRow {
+                                Text("发布分支").foregroundStyle(.secondary)
+                                Text(viewModel.project.publishBranch)
                             }
                             GridRow {
                                 Text("Workflow").foregroundStyle(.secondary)
@@ -48,28 +34,48 @@ struct PublishView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
+                        TextField("提交信息", text: $viewModel.publishMessage)
+                            .textFieldStyle(.roundedBorder)
+
                         HStack {
-                            Button("查询最新状态") {
-                                viewModel.refreshActionsStatus()
+                            Button("1) 检测结构") {
+                                viewModel.runHugoStructureCheck()
                             }
-                            Button("检查 Pages 来源") {
+                            Button("2) 生成/更新 Workflow") {
+                                viewModel.bootstrapGitHubPagesWorkflow()
+                            }
+                            Button("3) 检查 Pages 来源") {
                                 viewModel.refreshPagesSourceStatus()
                             }
                             Button("修复为 GitHub Actions") {
                                 viewModel.repairPagesSourceToWorkflow()
                             }
-                            if let run = viewModel.latestWorkflowStatus {
-                                Text(run.statusText)
-                                    .font(.caption2)
-                                    .foregroundStyle(statusColor(for: run).opacity(0.9))
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(statusColor(for: run).opacity(0.16))
-                                    .clipShape(Capsule())
+                            Spacer()
+                        }
+                        HStack {
+                            Button("4) 构建校验") {
+                                viewModel.runBuild()
                             }
-                            Button("一键生成 Pages Workflow") {
-                                viewModel.bootstrapGitHubPagesWorkflow()
+                            Button("5) 同步远端") {
+                                viewModel.runSyncWithRemote()
                             }
+                            Button("6) 提交并推送") {
+                                viewModel.runPublish()
+                            }
+                            Button("部署状态") {
+                                viewModel.refreshActionsStatus()
+                            }
+                            Spacer()
+                        }
+
+                        HStack {
+                            Button("一键检测发布链路") {
+                                viewModel.runEnvironmentDiagnostics()
+                            }
+                            Button("一键发布（推荐）") {
+                                viewModel.runGuidedPublishWorkflow()
+                            }
+                            .keyboardShortcut(.return, modifiers: [.command])
                             Spacer()
                         }
 
@@ -115,6 +121,8 @@ struct PublishView: View {
                             }
                         }
 
+                        Divider()
+
                         if let run = viewModel.latestWorkflowStatus {
                             Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                                 GridRow {
@@ -149,31 +157,30 @@ struct PublishView: View {
                             Text("查询失败，请在下方日志查看错误详情与 AI 排障建议。")
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("点击“查询最新状态”后显示结果。")
+                            Text("点击“部署状态”后显示结果。")
                                 .foregroundStyle(.secondary)
                         }
-                    }
-                }
 
-                ModernCard(title: "发布控制台", subtitle: "同步、检测、提交并推送") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("提交信息", text: $viewModel.publishMessage)
-                            .textFieldStyle(.roundedBorder)
-
-                        HStack {
-                            Button("同步远程") {
-                                viewModel.runSyncWithRemote()
+                        DisclosureGroup("预检详情") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(viewModel.preflightChecks()) { check in
+                                    HStack(alignment: .top, spacing: 8) {
+                                        Image(systemName: iconName(for: check.level))
+                                            .foregroundStyle(color(for: check.level))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(check.title)
+                                                .font(.subheadline.weight(.semibold))
+                                            Text(check.detail)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                }
                             }
-                            Button("一键检测推送与部署") {
-                                viewModel.runEnvironmentDiagnostics()
-                            }
-                            Button("提交并推送") {
-                                viewModel.runPublish()
-                            }
-                            Spacer()
+                            .padding(.top, 6)
                         }
 
-                        Text("检测会验证 git/hugo 可用性、远程可达性、dry-run 推送权限与 Pages 部署链路。发布时自动排除 HugoDesk/HugoDeskArchive/.hugodesk.local.json，hugo.toml 始终随项目发布。")
+                        Text("推荐发布方式：先点击“一键发布（推荐）”。如需手动排障，再按上方 1→6 步骤逐项执行。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -199,7 +206,7 @@ struct PublishView: View {
                         }
 
                         if viewModel.publishLogEntries.isEmpty {
-                            Text("暂无日志。执行“同步/检测/推送”后会在这里显示进程与错误详情。")
+                            Text("暂无日志。执行“步骤按钮”或“一键发布”后会在这里显示进程与错误详情。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
@@ -256,13 +263,6 @@ struct PublishView: View {
             }
             .padding()
         }
-    }
-
-    private func statusColor(for run: WorkflowRunStatus) -> Color {
-        if run.conclusion == "success" { return .green }
-        if run.conclusion == "failure" || run.conclusion == "cancelled" { return .red }
-        if run.status == "in_progress" || run.status == "queued" { return .orange }
-        return .secondary
     }
 
     private func iconName(for level: PublishCheck.Level) -> String {
