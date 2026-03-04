@@ -3,7 +3,7 @@
 
 > 一句话安利：如果你每次发博客都要在终端里反复敲 `hugo`、`git pull`、`git push`，那 HugoDesk 就是给你省时间和省心的。🧃
 
-## 🌟 小红书风推荐文（可直接转发）
+## 🌟 
 
 最近在用一个本地博客发布工具 `HugoDesk`，体验真的很像“把命令行工作流装进了可视化面板”：
 
@@ -84,7 +84,7 @@ HugoDesk 把这套流程做成图形界面，目标是：**减少重复操作，
 ## 🛠️ 本地运行与构建
 
 ```bash
-cd /Users/sexyfeifan/Library/Mobile\ Documents/com~apple~CloudDocs/Code/HugoDesk
+cd /Users/Library/Mobile\ Documents/com~apple~CloudDocs/Code/HugoDesk
 swift run
 ```
 
@@ -113,7 +113,4 @@ swift build -c release
 - 用 GitHub Pages 部署，希望流程更稳定可控
 - 想要“可视化 + 可排障 + 可追踪”发布体验
 
-## 💬 小红书标签建议
-
-`#Hugo` `#GitHubPages` `#独立博客` `#程序员效率工具` `#开源工具` `#MacApp`
 
