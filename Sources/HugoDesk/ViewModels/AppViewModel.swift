@@ -27,6 +27,10 @@ final class AppViewModel: ObservableObject {
     @Published var aiAPIKey: String = ""
     @Published var latestWorkflowStatus: WorkflowRunStatus?
     @Published var latestWorkflowError: String = ""
+    @Published var pagesSiteStatus: GitHubPagesSiteStatus?
+    @Published var pagesSiteError: String = ""
+    @Published var lastHugoStructureReport: HugoStructureReport?
+    @Published var showHugoStructureRepairPrompt: Bool = false
     @Published var isBusy: Bool = false
     @Published var statusText: String = ""
 
@@ -35,8 +39,15 @@ final class AppViewModel: ObservableObject {
     private let publishService = PublishService()
     private let imageAssetService = ImageAssetService()
     private let actionsService = GitHubActionsService()
+    private let pagesService = GitHubPagesService()
     private let credentialStore = CredentialStore()
     private let aiService = AIService()
+    private static let hugoToolOperationNames: Set<String> = [
+        "检查 Hugo 版本",
+        "升级 Hugo",
+        "检测 Hugo 文件结构",
+        "修复 Hugo 文件结构"
+    ]
 
     init() {
         let project = BlogProject.bootstrap()
@@ -281,6 +292,28 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func runHugoStructureCheck() {
+        runTask(operation: "检测 Hugo 文件结构", successStatus: "Hugo 文件结构检测完成。") {
+            let report = self.publishService.checkHugoStructure(project: self.project)
+            self.lastHugoStructureReport = report
+            self.showHugoStructureRepairPrompt = report.hasMissingItems
+            return report.renderCheckLog()
+        }
+    }
+
+    func runHugoStructureRepair() {
+        runTask(operation: "修复 Hugo 文件结构", successStatus: "Hugo 文件结构修复完成。") {
+            let report = try self.publishService.repairHugoStructure(project: self.project)
+            self.lastHugoStructureReport = report
+            self.showHugoStructureRepairPrompt = false
+            return report.renderRepairLog()
+        }
+    }
+
+    func dismissHugoStructureRepairPrompt() {
+        showHugoStructureRepairPrompt = false
+    }
+
     func runSyncWithRemote() {
         runTask(operation: "同步远端", successStatus: "已与远端分支同步。") {
             let output = try self.publishService.syncWithRemote(
@@ -332,6 +365,40 @@ final class AppViewModel: ObservableObject {
             状态: \(run.statusText)
             提交: \(run.sha)
             详情: \(run.htmlURL)
+            """
+        }
+    }
+
+    func refreshPagesSourceStatus() {
+        runAsyncTask(operation: "检查 Pages 来源", successStatus: "Pages 来源检查完成。") {
+            self.pagesSiteError = ""
+            self.pagesSiteStatus = nil
+            let status = try await self.pagesService.fetchSiteStatus(
+                remoteURL: self.publishRemoteURL,
+                token: self.githubToken
+            )
+            self.pagesSiteStatus = status
+            return """
+            build_type: \(status.buildType)
+            source: \(status.sourceDescription)
+            访问地址: \(status.htmlURL)
+            """
+        }
+    }
+
+    func repairPagesSourceToWorkflow() {
+        runAsyncTask(operation: "修复 Pages 来源", successStatus: "Pages 来源已切换为 GitHub Actions。") {
+            self.pagesSiteError = ""
+            let status = try await self.pagesService.switchToWorkflowBuild(
+                remoteURL: self.publishRemoteURL,
+                token: self.githubToken,
+                branch: self.project.publishBranch
+            )
+            self.pagesSiteStatus = status
+            return """
+            build_type: \(status.buildType)
+            source: \(status.sourceDescription)
+            访问地址: \(status.htmlURL)
             """
         }
     }
@@ -621,11 +688,21 @@ final class AppViewModel: ObservableObject {
                     details: details,
                     level: .success
                 )
-                latestWorkflowError = ""
+                if operation == "查询 Actions 状态" {
+                    latestWorkflowError = ""
+                }
+                if operation.contains("Pages") {
+                    pagesSiteError = ""
+                }
                 statusText = successStatus
             } catch {
                 let errorText = error.localizedDescription
-                latestWorkflowError = errorText
+                if operation == "查询 Actions 状态" {
+                    latestWorkflowError = errorText
+                }
+                if operation.contains("Pages") {
+                    pagesSiteError = errorText
+                }
                 appendPublishLog(
                     operation: operation,
                     summary: "执行失败",
@@ -694,6 +771,30 @@ final class AppViewModel: ObservableObject {
         aiBaseURL = profile.baseURL
         aiModel = profile.model
         aiAPIKey = credentialStore.loadAIAPIKey(for: project.rootPath)
+    }
+
+    var hugoToolLogEntries: [PublishLogEntry] {
+        publishLogEntries.filter { Self.hugoToolOperationNames.contains($0.operation) }
+    }
+
+    var hugoToolLog: String {
+        hugoToolLogEntries.map(\.rendered).joined(separator: "\n\n")
+    }
+
+    var hugoStructurePromptMessage: String {
+        guard let report = lastHugoStructureReport else {
+            return "检测到结构缺失，是否自动补齐？"
+        }
+        let lines = report.missingItemsForPrompt
+        guard !lines.isEmpty else {
+            return "检测到结构缺失，是否自动补齐？"
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    func clearHugoToolLogs() {
+        publishLogEntries.removeAll { Self.hugoToolOperationNames.contains($0.operation) }
+        publishLog = publishLogEntries.map(\.rendered).joined(separator: "\n\n")
     }
 
     func preflightChecks() -> [PublishCheck] {
@@ -771,6 +872,35 @@ final class AppViewModel: ObservableObject {
                 level: .ok
             )
         )
+
+        if let pagesSiteStatus {
+            let isWorkflow = pagesSiteStatus.buildType.lowercased() == "workflow"
+            checks.append(
+                PublishCheck(
+                    title: "Pages 来源",
+                    detail: isWorkflow
+                        ? "已配置为 GitHub Actions（workflow）。"
+                        : "当前为 \(pagesSiteStatus.buildType)，建议切换为 workflow，避免 pages-build-deployment 覆盖站点。",
+                    level: isWorkflow ? .ok : .warning
+                )
+            )
+        } else if !pagesSiteError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            checks.append(
+                PublishCheck(
+                    title: "Pages 来源",
+                    detail: "检查失败：\(pagesSiteError)",
+                    level: .warning
+                )
+            )
+        } else {
+            checks.append(
+                PublishCheck(
+                    title: "Pages 来源",
+                    detail: "尚未检测，点击“检查 Pages 来源”确认是否为 workflow。",
+                    level: .warning
+                )
+            )
+        }
 
         let postCount = posts.count
         checks.append(

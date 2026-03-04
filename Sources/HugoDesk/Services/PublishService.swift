@@ -46,6 +46,41 @@ final class PublishService {
         return logs.joined(separator: "\n\n")
     }
 
+    func checkHugoStructure(project: BlogProject) -> HugoStructureReport {
+        inspectHugoStructure(project: project)
+    }
+
+    func repairHugoStructure(project: BlogProject) throws -> HugoStructureReport {
+        var report = inspectHugoStructure(project: project)
+        var createdDirectories: [String] = []
+        var createdFiles: [String] = []
+
+        for relativePath in report.missingRequiredDirectories + report.missingRecommendedDirectories {
+            let dirURL = project.rootURL.appendingPathComponent(relativePath, isDirectory: true)
+            try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
+            createdDirectories.append(relativePath)
+        }
+
+        for relativePath in report.missingRequiredFiles {
+            let fileURL = project.rootURL.appendingPathComponent(relativePath, isDirectory: false)
+            if relativePath == "hugo.toml" {
+                let defaultConfig = defaultHugoConfigTemplate()
+                try defaultConfig.write(to: fileURL, atomically: true, encoding: .utf8)
+                createdFiles.append(relativePath)
+            }
+        }
+
+        if report.missingRecommendedFiles.contains(".github/workflows/hugo.yaml") {
+            _ = try ensureGitHubPagesWorkflow(project: project)
+            createdFiles.append(".github/workflows/hugo.yaml")
+        }
+
+        report = inspectHugoStructure(project: project)
+        report.createdDirectories = Array(Set(createdDirectories)).sorted()
+        report.createdFiles = Array(Set(createdFiles)).sorted()
+        return report
+    }
+
     func commitAndPush(
         project: BlogProject,
         message: String,
@@ -266,6 +301,7 @@ final class PublishService {
             }
             lines.append("修复建议：在应用发布页重新点击“一键生成 Pages Workflow”，会自动清理重复文件。")
         }
+        lines.append("提示：若出现 Actions 成功后又执行 pages-build-deployment 且站点 File not found，通常是 GitHub Pages 来源仍为 Branch。请在发布页点击“检查 Pages 来源/修复为 GitHub Actions”。")
 
         if containsTLSError(remoteProbe.output) || containsTLSError(dryRun.output) {
             lines.append("⚠️ 检测到 TLS/SSL 网络异常。可尝试更换网络、关闭系统代理或配置 Git 代理后重试。")
@@ -705,6 +741,72 @@ final class PublishService {
         }
     }
 
+    private func inspectHugoStructure(project: BlogProject) -> HugoStructureReport {
+        let requiredFiles = ["hugo.toml"]
+        var requiredDirectories = ["content"]
+
+        let contentSubpath = project.contentSubpath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !contentSubpath.isEmpty, contentSubpath != "content", !contentSubpath.hasPrefix("/") {
+            requiredDirectories.append(contentSubpath)
+        }
+
+        let recommendedDirectories = ["archetypes", "assets", "layouts", "static", "themes"]
+        let recommendedFiles = [".github/workflows/hugo.yaml"]
+
+        let missingRequiredFiles = requiredFiles.filter { !fileExists(project: project, relativePath: $0) }
+        let missingRequiredDirectories = Array(Set(requiredDirectories))
+            .sorted()
+            .filter { !directoryExists(project: project, relativePath: $0) }
+        let missingRecommendedDirectories = recommendedDirectories.filter {
+            !directoryExists(project: project, relativePath: $0)
+        }
+        let missingRecommendedFiles = recommendedFiles.filter { !fileExists(project: project, relativePath: $0) }
+
+        return HugoStructureReport(
+            rootPath: project.rootPath,
+            missingRequiredFiles: missingRequiredFiles,
+            missingRequiredDirectories: missingRequiredDirectories,
+            missingRecommendedFiles: missingRecommendedFiles,
+            missingRecommendedDirectories: missingRecommendedDirectories,
+            createdFiles: [],
+            createdDirectories: []
+        )
+    }
+
+    private func fileExists(project: BlogProject, relativePath: String) -> Bool {
+        var isDirectory = ObjCBool(false)
+        let absolute = project.rootURL.appendingPathComponent(relativePath, isDirectory: false).path
+        guard fm.fileExists(atPath: absolute, isDirectory: &isDirectory) else {
+            return false
+        }
+        return !isDirectory.boolValue
+    }
+
+    private func directoryExists(project: BlogProject, relativePath: String) -> Bool {
+        var isDirectory = ObjCBool(false)
+        let absolute = project.rootURL.appendingPathComponent(relativePath, isDirectory: true).path
+        guard fm.fileExists(atPath: absolute, isDirectory: &isDirectory) else {
+            return false
+        }
+        return isDirectory.boolValue
+    }
+
+    private func defaultHugoConfigTemplate() -> String {
+        """
+        baseURL = "/"
+        languageCode = "zh-cn"
+        title = "My Hugo Site"
+
+        [markup]
+          [markup.goldmark]
+            [markup.goldmark.renderer]
+              unsafe = true
+
+        [params]
+          author = ""
+        """
+    }
+
 }
 
 private struct ToolStatus {
@@ -723,4 +825,88 @@ private struct CommandCapture {
 private struct GitAuthContext {
     var environment: [String: String]
     var cleanup: () -> Void
+}
+
+struct HugoStructureReport {
+    let rootPath: String
+    let missingRequiredFiles: [String]
+    let missingRequiredDirectories: [String]
+    let missingRecommendedFiles: [String]
+    let missingRecommendedDirectories: [String]
+    var createdFiles: [String]
+    var createdDirectories: [String]
+
+    var hasMissingItems: Bool {
+        !missingRequiredFiles.isEmpty
+            || !missingRequiredDirectories.isEmpty
+            || !missingRecommendedFiles.isEmpty
+            || !missingRecommendedDirectories.isEmpty
+    }
+
+    var missingItemsForPrompt: [String] {
+        var lines: [String] = []
+        lines += missingRequiredFiles.map { "必需文件：\($0)" }
+        lines += missingRequiredDirectories.map { "必需目录：\($0)" }
+        lines += missingRecommendedFiles.map { "推荐文件：\($0)" }
+        lines += missingRecommendedDirectories.map { "推荐目录：\($0)" }
+        return lines
+    }
+
+    func renderCheckLog() -> String {
+        var lines: [String] = []
+        lines.append("== Hugo 文件结构检测 ==")
+        lines.append("项目目录：\(rootPath)")
+        lines.append(hasMissingItems ? "检测结果：发现缺失项。" : "检测结果：结构完整。")
+
+        if !missingRequiredFiles.isEmpty {
+            lines.append("-- 缺失必需文件 --")
+            lines.append(contentsOf: missingRequiredFiles.map { "- \($0)" })
+        }
+        if !missingRequiredDirectories.isEmpty {
+            lines.append("-- 缺失必需目录 --")
+            lines.append(contentsOf: missingRequiredDirectories.map { "- \($0)" })
+        }
+        if !missingRecommendedFiles.isEmpty {
+            lines.append("-- 缺失推荐文件 --")
+            lines.append(contentsOf: missingRecommendedFiles.map { "- \($0)" })
+        }
+        if !missingRecommendedDirectories.isEmpty {
+            lines.append("-- 缺失推荐目录 --")
+            lines.append(contentsOf: missingRecommendedDirectories.map { "- \($0)" })
+        }
+
+        if hasMissingItems {
+            lines.append("建议：点击“修复缺失结构”自动补齐。")
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    func renderRepairLog() -> String {
+        var lines: [String] = []
+        lines.append("== Hugo 文件结构修复 ==")
+        lines.append("项目目录：\(rootPath)")
+
+        if createdFiles.isEmpty && createdDirectories.isEmpty {
+            lines.append("没有创建新文件或目录。")
+        } else {
+            if !createdFiles.isEmpty {
+                lines.append("-- 已创建文件 --")
+                lines.append(contentsOf: createdFiles.map { "- \($0)" })
+            }
+            if !createdDirectories.isEmpty {
+                lines.append("-- 已创建目录 --")
+                lines.append(contentsOf: createdDirectories.map { "- \($0)" })
+            }
+        }
+
+        if hasMissingItems {
+            lines.append("⚠️ 仍有缺失项，请检查目录权限或手动处理。")
+            lines.append(contentsOf: missingItemsForPrompt.map { "- \($0)" })
+        } else {
+            lines.append("✅ 结构修复完成。")
+        }
+
+        return lines.joined(separator: "\n")
+    }
 }

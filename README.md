@@ -21,6 +21,8 @@ HugoDesk 的定位就是：
 - 🧠 AI 能力：可配置 API 地址/Key/模型，在写作页执行 Markdown 排版与错误排障建议
 - 🔐 安全推送：支持 GitHub Token，推送和检测可在无交互终端下执行
 - 🧪 发布检测：检查 Git/Hugo、远程可达性、dry-run 推送、Pages Workflow 完整性
+- 🧭 Pages 来源治理：可检测 `build_type/source` 并一键修复为 GitHub Actions（workflow）
+- 🧱 结构体检：可检测 Hugo 目录结构缺失并自动补齐
 - ⚙️ 配置包机制：项目根目录 `.hugodesk.local.json` 自动读写（不进入 Git）
 
 ## 页面结构（当前）🧭
@@ -34,11 +36,12 @@ HugoDesk 的定位就是：
 ## 发布流程（推荐）📦
 
 1. 在 `项目` 页确认博客根目录（包含 `hugo.toml`、`content`、`themes`）。
-2. 在 `发布` 页填写仓库地址、Token、Workflow 名称。
+2. 在 `项目` 页填写仓库地址、Token、Workflow 名称。
 3. 点击 `一键生成 Pages Workflow`（首次或缺失时）。
-4. 点击 `同步远程`，解决潜在 non-fast-forward 风险。
-5. 点击 `一键检测推送与部署`，确认链路健康。
-6. 点击 `提交并推送`。
+4. 点击 `检查 Pages 来源`，确认 `build_type=workflow`（若不是，点击 `修复为 GitHub Actions`）。
+5. 点击 `同步远程`，解决潜在 non-fast-forward 风险。
+6. 点击 `一键检测推送与部署`，确认链路健康。
+7. 点击 `提交并推送`。
 
 > 当前策略固定为 **GitHub Actions 部署**，并且 `hugo.toml` 会随项目一起推送。
 
@@ -66,18 +69,17 @@ swift build -c release
 - 发布日志不会明文输出 Token
 - `.hugodesk.local.json` 默认不进入 Git
 
-## 更新说明（v0.3.11）🆕
+## 更新说明（v0.3.12）🆕
 
-本版本围绕“配置去重 + 发布提效 + 最终渲染预览”完成更新：
+本版本围绕“Pages 来源冲突修复 + Hugo 结构体检”完成更新：
 
-- ✅ 去除发布页与项目页重复配置：远程地址/凭据统一在项目页维护
-- ✅ 发布页 Actions 状态改为读取型展示，避免双处配置导致不一致
-- ✅ 新增重复 Pages workflow 检测与自动清理，避免同次提交触发多条 Deploy 任务
-- ✅ 新增 Hugo 常用快捷操作：检查 Hugo 版本、Homebrew 一键升级 Hugo
-- ✅ 编辑器预览改为 Hugo 最终渲染结果（构建后读取 `public` HTML 预览）
-- ✅ 继续保留一键生成 Pages Workflow 与日志排障链路
+- ✅ 发布页新增 `检查 Pages 来源` 与 `修复为 GitHub Actions` 按钮
+- ✅ 预检新增 Pages 来源状态，直接识别 branch/workflow 差异
+- ✅ 诊断日志新增 `pages-build-deployment` 覆盖风险提示与修复路径
+- ✅ 项目页 Hugo 工具新增文件结构检测、缺失弹窗提示、一键修复
+- ✅ Hugo 工具区新增独立日志面板，显示后台进程和错误细节并支持复制
 
 ## 历史更新速览 📚
 
+- `v0.3.11`：配置去重、重复 workflow 清理、最终渲染预览
 - `v0.3.10`：配置去重、Hugo 工具快捷操作、最终渲染预览
-- `v0.3.9`：发布链路减法整理，固定 Hugo 正确发布路径

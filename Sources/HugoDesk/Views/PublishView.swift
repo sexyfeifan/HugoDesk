@@ -52,6 +52,12 @@ struct PublishView: View {
                             Button("查询最新状态") {
                                 viewModel.refreshActionsStatus()
                             }
+                            Button("检查 Pages 来源") {
+                                viewModel.refreshPagesSourceStatus()
+                            }
+                            Button("修复为 GitHub Actions") {
+                                viewModel.repairPagesSourceToWorkflow()
+                            }
                             if let run = viewModel.latestWorkflowStatus {
                                 Text(run.statusText)
                                     .font(.caption2)
@@ -65,6 +71,48 @@ struct PublishView: View {
                                 viewModel.bootstrapGitHubPagesWorkflow()
                             }
                             Spacer()
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Pages 构建来源")
+                                .font(.subheadline.weight(.semibold))
+                            if let site = viewModel.pagesSiteStatus {
+                                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                                    GridRow {
+                                        Text("build_type").foregroundStyle(.secondary)
+                                        Text(site.buildType)
+                                    }
+                                    GridRow {
+                                        Text("source").foregroundStyle(.secondary)
+                                        Text(site.sourceDescription)
+                                    }
+                                    GridRow {
+                                        Text("地址").foregroundStyle(.secondary)
+                                        Text(site.htmlURL)
+                                            .textSelection(.enabled)
+                                    }
+                                }
+                                if site.buildType.lowercased() != "workflow" {
+                                    Text("当前不是 workflow 模式，可能触发 pages-build-deployment 覆盖站点并导致 File not found。")
+                                        .font(.caption)
+                                        .foregroundStyle(.orange)
+                                } else {
+                                    Text("已使用 workflow 构建来源，不会再走分支直部署链路。")
+                                        .font(.caption)
+                                        .foregroundStyle(.green)
+                                }
+                            } else if !viewModel.pagesSiteError.isEmpty {
+                                Text("Pages 来源检查失败：\(viewModel.pagesSiteError)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            } else {
+                                Text("点击“检查 Pages 来源”确认是否已切换到 workflow。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         if let run = viewModel.latestWorkflowStatus {
