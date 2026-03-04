@@ -23,7 +23,14 @@ final class PublishService {
         return renderProcessLog(step: "查看 Git 状态", result: result)
     }
 
-    func commitAndPush(project: BlogProject, message: String, remoteURL: String, githubToken: String = "") throws -> String {
+    func commitAndPush(
+        project: BlogProject,
+        message: String,
+        remoteURL: String,
+        githubToken: String = "",
+        deploymentMode: PublishDeploymentMode = .githubActions,
+        excludeHugoConfigOnPublish: Bool = false
+    ) throws -> String {
         var logs: [String] = []
         let auth = try makeGitAuthContext(githubToken: githubToken)
         defer { auth.cleanup() }
@@ -57,8 +64,19 @@ final class PublishService {
             logs.append(contentsOf: ensureRemoteURLLogs(project: project, remoteURL: remoteURL))
         }
 
-        let add = try stagePublishFiles(project: project)
+        let add = try stagePublishFiles(project: project, excludeHugoConfigOnPublish: excludeHugoConfigOnPublish)
         logs.append(renderProcessLog(step: "暂存变更", result: add))
+
+        if deploymentMode == .githubActions {
+            let workflowExists = hasGitHubPagesWorkflow(project: project)
+            if !workflowExists {
+                logs.append("""
+                == 部署模式提示 ==
+                当前为 GitHub Actions 部署，但未检测到 .github/workflows/hugo.yaml。
+                请先在发布页点击“一键生成 Pages Workflow”，再执行提交推送。
+                """)
+            }
+        }
 
         do {
             let commit = try runner.run(command: "git", arguments: ["commit", "-m", message], in: project.rootURL)
@@ -137,7 +155,13 @@ final class PublishService {
         return logs.joined(separator: "\n\n")
     }
 
-    func diagnosePublishEnvironment(project: BlogProject, remoteURL: String, githubToken: String = "") throws -> String {
+    func diagnosePublishEnvironment(
+        project: BlogProject,
+        remoteURL: String,
+        githubToken: String = "",
+        deploymentMode: PublishDeploymentMode = .githubActions,
+        excludeHugoConfigOnPublish: Bool = false
+    ) throws -> String {
         var lines: [String] = []
         let auth = try makeGitAuthContext(githubToken: githubToken)
         defer { auth.cleanup() }
@@ -203,6 +227,28 @@ final class PublishService {
             environment: tokenEnv
         )
         lines.append(renderCheck(title: "推送权限（git push --dry-run）", result: dryRun))
+
+        lines.append("")
+        lines.append("== 部署链路检查 ==")
+        let workflowExists = hasGitHubPagesWorkflow(project: project)
+        lines.append(workflowExists
+            ? "✅ GitHub Pages Workflow：已检测到 .github/workflows/hugo.yaml"
+            : "❌ GitHub Pages Workflow：未检测到 .github/workflows/hugo.yaml")
+        lines.append("部署模式：\(deploymentMode.title)")
+        if excludeHugoConfigOnPublish {
+            lines.append("⚠️ 当前设置为“推送时排除 hugo.toml”，若依赖 Actions 构建将导致部署失败。")
+            lines.append("修复建议：关闭该选项，重新提交并推送。")
+        }
+
+        if deploymentMode == .githubActions, !workflowExists {
+            lines.append("⚠️ 当前使用 GitHub Actions 模式，但 workflow 缺失。")
+            lines.append("修复建议：在应用发布页点击“一键生成 Pages Workflow”，然后重新推送。")
+        }
+
+        if deploymentMode == .directSourcePush, isGitHubPagesRepository(remoteTarget) {
+            lines.append("⚠️ 仓库看起来是 GitHub Pages 站点（*.github.io），仅推送源码不会直接生成站点页面。")
+            lines.append("建议切换到“GitHub Actions（推荐）”模式，或改用专门的静态产物部署仓库。")
+        }
 
         if containsTLSError(remoteProbe.output) || containsTLSError(dryRun.output) {
             lines.append("⚠️ 检测到 TLS/SSL 网络异常。可尝试更换网络、关闭系统代理或配置 Git 代理后重试。")
@@ -277,20 +323,22 @@ final class PublishService {
         }
     }
 
-    private func stagePublishFiles(project: BlogProject) throws -> ProcessResult {
+    private func stagePublishFiles(project: BlogProject, excludeHugoConfigOnPublish: Bool) throws -> ProcessResult {
         let baseArguments = ["add", "--all", "--", "."]
-        let commonExcludes = [
+        var commonExcludes = [
             ":(exclude)HugoDesk",
             ":(exclude)HugoDesk/**",
             ":(exclude)HugoDeskArchive",
             ":(exclude)HugoDeskArchive/**",
-            ":(exclude)hugo.toml",
             ":(glob,exclude)**/HugoDesk",
             ":(glob,exclude)**/HugoDesk/**",
             ":(glob,exclude)**/HugoDeskArchive",
-            ":(glob,exclude)**/HugoDeskArchive/**",
-            ":(glob,exclude)**/hugo.toml"
+            ":(glob,exclude)**/HugoDeskArchive/**"
         ]
+        if excludeHugoConfigOnPublish {
+            commonExcludes.append(":(exclude)hugo.toml")
+            commonExcludes.append(":(glob,exclude)**/hugo.toml")
+        }
         let localBundleExcludes = [
             ":(exclude).hugodesk.local.json",
             ":(glob,exclude)**/.hugodesk.local.json"
@@ -520,6 +568,92 @@ final class PublishService {
         raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "\n\n+", with: "\n", options: .regularExpression)
+    }
+
+    func hasGitHubPagesWorkflow(project: BlogProject) -> Bool {
+        fm.fileExists(atPath: githubWorkflowURL(project: project).path)
+    }
+
+    func ensureGitHubPagesWorkflow(project: BlogProject) throws -> String {
+        let workflowURL = githubWorkflowURL(project: project)
+        try fm.createDirectory(at: workflowURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        let workflow = """
+        name: Deploy Hugo site to Pages
+
+        on:
+          push:
+            branches:
+              - \(project.publishBranch)
+          workflow_dispatch:
+
+        permissions:
+          contents: read
+          pages: write
+          id-token: write
+
+        concurrency:
+          group: "pages"
+          cancel-in-progress: false
+
+        defaults:
+          run:
+            shell: bash
+
+        jobs:
+          build:
+            runs-on: ubuntu-latest
+            env:
+              HUGO_VERSION: 0.157.0
+            steps:
+              - name: Checkout
+                uses: actions/checkout@v4
+                with:
+                  fetch-depth: 0
+
+              - name: Setup Hugo
+                uses: peaceiris/actions-hugo@v3
+                with:
+                  hugo-version: ${{ env.HUGO_VERSION }}
+                  extended: true
+
+              - name: Setup Pages
+                id: pages
+                uses: actions/configure-pages@v5
+
+              - name: Build with Hugo
+                run: hugo --gc --minify --baseURL "${{ steps.pages.outputs.base_url }}/"
+
+              - name: Upload artifact
+                uses: actions/upload-pages-artifact@v3
+                with:
+                  path: ./public
+
+          deploy:
+            environment:
+              name: github-pages
+              url: ${{ steps.deployment.outputs.page_url }}
+            runs-on: ubuntu-latest
+            needs: build
+            steps:
+              - name: Deploy to GitHub Pages
+                id: deployment
+                uses: actions/deploy-pages@v4
+        """
+        try workflow.write(to: workflowURL, atomically: true, encoding: .utf8)
+        return workflowURL.path
+    }
+
+    private func githubWorkflowURL(project: BlogProject) -> URL {
+        project.rootURL
+            .appendingPathComponent(".github", isDirectory: true)
+            .appendingPathComponent("workflows", isDirectory: true)
+            .appendingPathComponent("hugo.yaml", isDirectory: false)
+    }
+
+    private func isGitHubPagesRepository(_ remoteTarget: String) -> Bool {
+        let text = remoteTarget.lowercased()
+        return text.contains("github.io.git") || text.contains("github.io")
     }
 }
 

@@ -19,13 +19,15 @@ swift run
 - AI formatting workflow (configurable API endpoint/model/key)
 - Release diagnostics with non-fast-forward detection and sync guidance
 
-## What's New ✨ (v0.3.7)
+## What's New ✨ (v0.3.8)
 
 - 🧭 Persisted last selected blog root path to avoid running commands in the wrong directory after app restart
 - 🧰 Expanded context-menu and selection markdown tools (H1-H6, table, details, footnote, divider)
 - 🖼️ Improved preview local-image resolution for `images/...`, `static/...`, and `./images/...`
 - 📦 Publish console now saves project config bundle directly instead of writing unrelated theme settings
 - 🔐 Publish/sync/diagnostics now support GitHub token authentication without exposing token in logs
+- 🚀 Added one-click GitHub Pages workflow bootstrap and deployment-chain diagnostics
+- ⚙️ Added publish strategy options (`GitHub Actions` recommended) and `hugo.toml` include/exclude switch
 
 ## Artifact Layout
 

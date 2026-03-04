@@ -35,6 +35,13 @@ struct PublishView: View {
                             .textFieldStyle(.roundedBorder)
                         SecureField("GitHub Token（可选，推荐）", text: $viewModel.githubToken)
                             .textFieldStyle(.roundedBorder)
+                        Picker("部署模式", selection: $viewModel.deploymentMode) {
+                            ForEach(PublishDeploymentMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        Toggle("推送时排除 hugo.toml（不推荐）", isOn: $viewModel.excludeHugoConfigOnPublish)
 
                         HStack {
                             Button("保存查询配置") {
@@ -51,6 +58,9 @@ struct PublishView: View {
                                     .padding(.vertical, 3)
                                     .background(statusColor(for: run).opacity(0.16))
                                     .clipShape(Capsule())
+                            }
+                            Button("一键生成 Pages Workflow") {
+                                viewModel.bootstrapGitHubPagesWorkflow()
                             }
                             Spacer()
                         }
@@ -126,7 +136,7 @@ struct PublishView: View {
                             }
                             Spacer()
                         }
-                        Text("检测会验证 git/hugo 可用性、远程可达性与 dry-run 推送权限，并给出可执行命令建议。推送前可先点击“同步远程”。发布时会自动排除 HugoDesk/HugoDeskArchive/hugo.toml/.hugodesk.local.json。")
+                        Text("检测会验证 git/hugo 可用性、远程可达性、dry-run 推送权限与 Pages 部署链路。发布时自动排除 HugoDesk/HugoDeskArchive/.hugodesk.local.json。hugo.toml 是否排除由上方开关控制。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
