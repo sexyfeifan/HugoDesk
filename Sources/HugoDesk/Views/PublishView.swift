@@ -9,7 +9,7 @@ struct PublishView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                ModernCard(title: "发布工作流", subtitle: "替代命令行：检查结构 → 构建验证 → 同步远端 → 推送 → 部署验证") {
+                ModernCard(title: "发布工作流", subtitle: "替代命令行：同步远端 → 提交推送 → GitHub Actions 自动部署") {
                     VStack(alignment: .leading, spacing: 10) {
                         Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
                             GridRow {
@@ -38,28 +38,22 @@ struct PublishView: View {
                             .textFieldStyle(.roundedBorder)
 
                         HStack {
-                            Button("1) 检测结构") {
-                                viewModel.runHugoStructureCheck()
+                            Button("同步远端") {
+                                viewModel.runSyncWithRemote()
                             }
-                            Button("2) 生成/更新 Workflow") {
+                            Button("生成/更新 Workflow") {
                                 viewModel.bootstrapGitHubPagesWorkflow()
                             }
-                            Button("3) 检查 Pages 来源") {
+                            Button("检查 Pages 来源") {
                                 viewModel.refreshPagesSourceStatus()
                             }
-                            Button("修复为 GitHub Actions") {
+                            Button("修复 Pages 来源") {
                                 viewModel.repairPagesSourceToWorkflow()
                             }
                             Spacer()
                         }
                         HStack {
-                            Button("4) 构建校验") {
-                                viewModel.runBuild()
-                            }
-                            Button("5) 同步远端") {
-                                viewModel.runSyncWithRemote()
-                            }
-                            Button("6) 提交并推送") {
+                            Button("提交并推送") {
                                 viewModel.runPublish()
                             }
                             Button("部署状态") {
@@ -69,13 +63,19 @@ struct PublishView: View {
                         }
 
                         HStack {
-                            Button("一键检测发布链路") {
-                                viewModel.runEnvironmentDiagnostics()
-                            }
                             Button("一键发布（推荐）") {
                                 viewModel.runGuidedPublishWorkflow()
                             }
                             .keyboardShortcut(.return, modifiers: [.command])
+                            Button("本地构建校验（可选）") {
+                                viewModel.runBuild()
+                            }
+                            Button("发布链路诊断（可选）") {
+                                viewModel.runEnvironmentDiagnostics()
+                            }
+                            Button("检测 Hugo 结构") {
+                                viewModel.runHugoStructureCheck()
+                            }
                             Spacer()
                         }
 
@@ -180,7 +180,7 @@ struct PublishView: View {
                             .padding(.top, 6)
                         }
 
-                        Text("推荐发布方式：先点击“一键发布（推荐）”。如需手动排障，再按上方 1→6 步骤逐项执行。")
+                        Text("推荐方式：直接点击“一键发布（推荐）”。手动方式只需：同步远端 → 提交并推送 → 部署状态。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

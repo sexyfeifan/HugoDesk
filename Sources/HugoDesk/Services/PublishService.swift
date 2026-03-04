@@ -55,7 +55,7 @@ final class PublishService {
         var createdDirectories: [String] = []
         var createdFiles: [String] = []
 
-        for relativePath in report.missingRequiredDirectories + report.missingRecommendedDirectories {
+        for relativePath in report.missingRequiredDirectories {
             let dirURL = project.rootURL.appendingPathComponent(relativePath, isDirectory: true)
             try fm.createDirectory(at: dirURL, withIntermediateDirectories: true)
             createdDirectories.append(relativePath)
@@ -742,7 +742,19 @@ final class PublishService {
     }
 
     private func inspectHugoStructure(project: BlogProject) -> HugoStructureReport {
-        let requiredFiles = ["hugo.toml"]
+        let requiredConfigCandidates = [
+            "hugo.toml", "hugo.yaml", "hugo.yml", "hugo.json",
+            "config.toml", "config.yaml", "config.yml", "config.json",
+            "config/_default/hugo.toml", "config/_default/hugo.yaml", "config/_default/hugo.yml", "config/_default/hugo.json",
+            "config/_default/config.toml", "config/_default/config.yaml", "config/_default/config.yml", "config/_default/config.json"
+        ]
+        let hasConfig = requiredConfigCandidates.contains { fileExists(project: project, relativePath: $0) }
+
+        var missingRequiredFiles: [String] = []
+        if !hasConfig {
+            missingRequiredFiles.append("hugo.toml（或 config/_default/hugo.toml）")
+        }
+
         var requiredDirectories = ["content"]
 
         let contentSubpath = project.contentSubpath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -753,7 +765,6 @@ final class PublishService {
         let recommendedDirectories = ["archetypes", "assets", "layouts", "static", "themes"]
         let recommendedFiles = [".github/workflows/hugo.yaml"]
 
-        let missingRequiredFiles = requiredFiles.filter { !fileExists(project: project, relativePath: $0) }
         let missingRequiredDirectories = Array(Set(requiredDirectories))
             .sorted()
             .filter { !directoryExists(project: project, relativePath: $0) }
@@ -843,6 +854,10 @@ struct HugoStructureReport {
             || !missingRecommendedDirectories.isEmpty
     }
 
+    var hasMissingRequiredItems: Bool {
+        !missingRequiredFiles.isEmpty || !missingRequiredDirectories.isEmpty
+    }
+
     var missingItemsForPrompt: [String] {
         var lines: [String] = []
         lines += missingRequiredFiles.map { "必需文件：\($0)" }
@@ -852,11 +867,24 @@ struct HugoStructureReport {
         return lines
     }
 
+    var missingRequiredItemsForPrompt: [String] {
+        var lines: [String] = []
+        lines += missingRequiredFiles.map { "必需文件：\($0)" }
+        lines += missingRequiredDirectories.map { "必需目录：\($0)" }
+        return lines
+    }
+
     func renderCheckLog() -> String {
         var lines: [String] = []
         lines.append("== Hugo 文件结构检测 ==")
         lines.append("项目目录：\(rootPath)")
-        lines.append(hasMissingItems ? "检测结果：发现缺失项。" : "检测结果：结构完整。")
+        if hasMissingRequiredItems {
+            lines.append("检测结果：存在必需项缺失（会阻断发布）。")
+        } else if hasMissingItems {
+            lines.append("检测结果：存在推荐项缺失（不阻断发布）。")
+        } else {
+            lines.append("检测结果：结构完整。")
+        }
 
         if !missingRequiredFiles.isEmpty {
             lines.append("-- 缺失必需文件 --")
@@ -875,8 +903,10 @@ struct HugoStructureReport {
             lines.append(contentsOf: missingRecommendedDirectories.map { "- \($0)" })
         }
 
-        if hasMissingItems {
-            lines.append("建议：点击“修复缺失结构”自动补齐。")
+        if hasMissingRequiredItems {
+            lines.append("建议：点击“修复缺失结构”补齐必需项。")
+        } else if hasMissingItems {
+            lines.append("提示：推荐项缺失可按需修复，不影响发布。")
         }
 
         return lines.joined(separator: "\n")

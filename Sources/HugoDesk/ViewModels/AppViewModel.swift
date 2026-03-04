@@ -296,7 +296,7 @@ final class AppViewModel: ObservableObject {
         runTask(operation: "检测 Hugo 文件结构", successStatus: "Hugo 文件结构检测完成。") {
             let report = self.publishService.checkHugoStructure(project: self.project)
             self.lastHugoStructureReport = report
-            self.showHugoStructureRepairPrompt = report.hasMissingItems
+            self.showHugoStructureRepairPrompt = report.hasMissingRequiredItems
             return report.renderCheckLog()
         }
     }
@@ -355,11 +355,20 @@ final class AppViewModel: ObservableObject {
 
             let structure = self.publishService.checkHugoStructure(project: self.project)
             self.lastHugoStructureReport = structure
-            guard !structure.hasMissingItems else {
+            guard !structure.hasMissingRequiredItems else {
                 self.showHugoStructureRepairPrompt = true
-                throw PublishWorkflowError.missingStructure(items: structure.missingItemsForPrompt)
+                throw PublishWorkflowError.missingStructure(items: structure.missingRequiredItemsForPrompt)
             }
             logs.append(structure.renderCheckLog())
+
+            let sync = try self.publishService.syncWithRemote(
+                project: self.project,
+                remoteURL: self.publishRemoteURL,
+                githubToken: self.githubToken
+            )
+            if !sync.isEmpty {
+                logs.append(sync)
+            }
 
             if self.publishService.hasGitHubPagesWorkflow(project: self.project) {
                 logs.append("== Pages Workflow ==\n已检测到 .github/workflows/hugo.yaml")
@@ -400,18 +409,6 @@ final class AppViewModel: ObservableObject {
                 }
             } else {
                 logs.append("== 检查 Pages 来源 ==\n跳过：未配置远程地址或 GitHub Token。")
-            }
-
-            let build = try self.publishService.runHugoBuild(project: self.project)
-            logs.append(build)
-
-            let sync = try self.publishService.syncWithRemote(
-                project: self.project,
-                remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
-            )
-            if !sync.isEmpty {
-                logs.append(sync)
             }
 
             let publish = try self.publishService.commitAndPush(
@@ -887,7 +884,9 @@ final class AppViewModel: ObservableObject {
         guard let report = lastHugoStructureReport else {
             return "检测到结构缺失，是否自动补齐？"
         }
-        let lines = report.missingItemsForPrompt
+        let lines = report.hasMissingRequiredItems
+            ? report.missingRequiredItemsForPrompt
+            : report.missingItemsForPrompt
         guard !lines.isEmpty else {
             return "检测到结构缺失，是否自动补齐？"
         }
