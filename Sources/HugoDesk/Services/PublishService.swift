@@ -256,6 +256,16 @@ final class PublishService {
             lines.append("⚠️ 当前使用 GitHub Actions 模式，但 workflow 缺失。")
             lines.append("修复建议：在应用发布页点击“一键生成 Pages Workflow”，然后重新推送。")
         }
+        let duplicates = duplicatePagesWorkflowFiles(project: project)
+        if duplicates.isEmpty {
+            lines.append("✅ 重复 Workflow 检查：未发现重复的 Pages workflow。")
+        } else {
+            lines.append("⚠️ 重复 Workflow 检查：发现 \(duplicates.count) 个可能重复的 workflow 文件。")
+            for file in duplicates {
+                lines.append("- \(file.lastPathComponent)")
+            }
+            lines.append("修复建议：在应用发布页重新点击“一键生成 Pages Workflow”，会自动清理重复文件。")
+        }
 
         if containsTLSError(remoteProbe.output) || containsTLSError(dryRun.output) {
             lines.append("⚠️ 检测到 TLS/SSL 网络异常。可尝试更换网络、关闭系统代理或配置 Git 代理后重试。")
@@ -644,7 +654,25 @@ final class PublishService {
                 uses: actions/deploy-pages@v4
         """
         try workflow.write(to: workflowURL, atomically: true, encoding: .utf8)
-        return workflowURL.path
+
+        let duplicates = duplicatePagesWorkflowFiles(project: project)
+        var removed: [String] = []
+        for file in duplicates {
+            do {
+                try fm.removeItem(at: file)
+                removed.append(file.lastPathComponent)
+            } catch {
+                continue
+            }
+        }
+
+        if removed.isEmpty {
+            return workflowURL.path
+        }
+        return """
+        \(workflowURL.path)
+        已清理重复 workflow：\(removed.joined(separator: ", "))
+        """
     }
 
     private func githubWorkflowURL(project: BlogProject) -> URL {
@@ -652,6 +680,29 @@ final class PublishService {
             .appendingPathComponent(".github", isDirectory: true)
             .appendingPathComponent("workflows", isDirectory: true)
             .appendingPathComponent("hugo.yaml", isDirectory: false)
+    }
+
+    func duplicatePagesWorkflowFileNames(project: BlogProject) -> [String] {
+        duplicatePagesWorkflowFiles(project: project).map(\.lastPathComponent)
+    }
+
+    private func duplicatePagesWorkflowFiles(project: BlogProject) -> [URL] {
+        let workflowDir = project.rootURL
+            .appendingPathComponent(".github", isDirectory: true)
+            .appendingPathComponent("workflows", isDirectory: true)
+        guard let files = try? fm.contentsOfDirectory(at: workflowDir, includingPropertiesForKeys: nil) else {
+            return []
+        }
+
+        let canonical = githubWorkflowURL(project: project).standardizedFileURL.path
+        return files.filter { file in
+            let ext = file.pathExtension.lowercased()
+            guard ext == "yml" || ext == "yaml" else { return false }
+            guard file.standardizedFileURL.path != canonical else { return false }
+            guard let content = try? String(contentsOf: file, encoding: .utf8).lowercased() else { return false }
+            return content.contains("deploy hugo site to pages")
+                || content.contains("actions/deploy-pages")
+        }
     }
 
 }

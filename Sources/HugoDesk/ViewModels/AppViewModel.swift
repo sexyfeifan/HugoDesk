@@ -391,9 +391,10 @@ final class AppViewModel: ObservableObject {
 
     func bootstrapGitHubPagesWorkflow() {
         runTask(operation: "生成 Pages Workflow", successStatus: "Pages Workflow 已生成。") {
-            let path = try self.publishService.ensureGitHubPagesWorkflow(project: self.project)
+            let detail = try self.publishService.ensureGitHubPagesWorkflow(project: self.project)
             return """
-            已写入：\(path)
+            Workflow 文件：
+            \(detail)
             下一步：
             1) 点击“提交并推送”
             2) 在 GitHub 仓库设置中确认 Pages Source 为 GitHub Actions
@@ -749,6 +750,17 @@ final class AppViewModel: ObservableObject {
                 title: "Pages Workflow",
                 detail: workflowExists ? "已检测到 .github/workflows/hugo.yaml。" : "未检测到 .github/workflows/hugo.yaml。",
                 level: workflowExists ? .ok : .error
+            )
+        )
+
+        let duplicateWorkflows = publishService.duplicatePagesWorkflowFileNames(project: project)
+        checks.append(
+            PublishCheck(
+                title: "重复 Workflow",
+                detail: duplicateWorkflows.isEmpty
+                    ? "未检测到重复 Pages workflow。"
+                    : "检测到重复 workflow：\(duplicateWorkflows.joined(separator: ", "))",
+                level: duplicateWorkflows.isEmpty ? .ok : .warning
             )
         )
 

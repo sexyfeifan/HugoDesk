@@ -126,9 +126,6 @@ struct ProjectSettingsView: View {
                         Button("重新加载项目") {
                             viewModel.loadAll()
                         }
-                        Button("保存远程与令牌") {
-                            viewModel.saveRemoteProfile()
-                        }
                         Button("导出项目配置包") {
                             viewModel.exportConfigBundleToProject()
                         }
