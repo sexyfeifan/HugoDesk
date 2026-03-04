@@ -11,6 +11,7 @@ struct EditorView: View {
     @State private var showDeleteConfirm = false
     @State private var editorSelection = NSRange(location: 0, length: 0)
     @State private var showingPreview = false
+    @State private var showingPreviewSheet = false
     @State private var imageInsertMode: ImageInsertMode = .cursor
 
     private let toolGroups: [(id: String, title: String, symbol: String, actions: [MarkdownAction])] = [
@@ -48,17 +49,9 @@ struct EditorView: View {
             }
             .navigationTitle("文章")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
-            .toolbar {
-                Button("快速新建") {
-                    viewModel.newPostTitle = ""
-                    viewModel.newPostFileName = "new-post.md"
-                }
-                Button("删除当前") {
-                    showDeleteConfirm = true
-                }
-            }
             .onChange(of: viewModel.selectedPostID) { _ in
                 viewModel.loadSelectedPost()
+                viewModel.cancelLivePreviewRefresh()
                 editorSelection = NSRange(location: 0, length: 0)
                 showingPreview = false
                 refreshInputsFromPost()
@@ -171,7 +164,7 @@ struct EditorView: View {
                                     .buttonStyle(.borderedProminent)
                                 }
 
-                                Button(editorSelection.length > 0 ? "AI 排版选区" : "AI 排版全文") {
+                                Button(editorSelection.length > 0 ? "AI 检查并排版选区" : "AI 检查并排版全文") {
                                     let range = editorSelection.length > 0 ? editorSelection : nil
                                     viewModel.formatPostWithAI(selectionRange: range) { next in
                                         editorSelection = next
@@ -180,6 +173,16 @@ struct EditorView: View {
                                 .buttonStyle(.borderedProminent)
 
                                 Spacer()
+                            }
+
+                            if viewModel.isAIFormatting {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    ProgressView(value: viewModel.aiFormattingProgress)
+                                        .progressViewStyle(.linear)
+                                    Text(viewModel.aiFormattingStatus)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
 
                             HStack {
@@ -213,19 +216,28 @@ struct EditorView: View {
                     ModernCard(title: "正文编辑", subtitle: "默认编辑区，通过按钮切换预览") {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Button(showingPreview ? "返回编辑区" : "显示预览区") {
+                                Button(showingPreview ? "编辑" : "预览") {
                                     showingPreview.toggle()
                                     if showingPreview {
-                                        viewModel.refreshRenderedPreview()
+                                        applyInputsToPost()
+                                        viewModel.scheduleLivePreviewRefresh(immediate: true)
+                                    } else {
+                                        viewModel.cancelLivePreviewRefresh()
                                     }
                                 }
                                 .buttonStyle(.bordered)
 
                                 if showingPreview {
                                     Button("刷新最终预览（构建）") {
-                                        viewModel.refreshRenderedPreview()
+                                        applyInputsToPost()
+                                        viewModel.scheduleLivePreviewRefresh(immediate: true)
                                     }
                                     .buttonStyle(.borderedProminent)
+
+                                    Button("弹窗预览") {
+                                        showingPreviewSheet = true
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
 
                                 Spacer()
@@ -235,7 +247,8 @@ struct EditorView: View {
                                 HugoRenderedPreviewView(
                                     project: viewModel.project,
                                     postFileURL: viewModel.editorPost.fileURL,
-                                    refreshToken: viewModel.previewRenderToken
+                                    refreshToken: viewModel.previewRenderToken,
+                                    markdownSource: viewModel.editorPost.body
                                 )
                                 .frame(minHeight: 540)
                                 .background(Color.black.opacity(0.03))
@@ -279,9 +292,48 @@ struct EditorView: View {
             .onAppear {
                 refreshInputsFromPost()
             }
+            .onChange(of: viewModel.editorPost.body) { _ in
+                guard showingPreview else { return }
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: viewModel.editorPost.title) { _ in
+                guard showingPreview else { return }
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: viewModel.editorPost.summary) { _ in
+                guard showingPreview else { return }
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: viewModel.editorPost.date) { _ in
+                guard showingPreview else { return }
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: viewModel.editorPost.draft) { _ in
+                guard showingPreview else { return }
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: tagsInput) { _ in
+                guard showingPreview else { return }
+                applyInputsToPost()
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: categoriesInput) { _ in
+                guard showingPreview else { return }
+                applyInputsToPost()
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onChange(of: keywordsInput) { _ in
+                guard showingPreview else { return }
+                applyInputsToPost()
+                viewModel.scheduleLivePreviewRefresh()
+            }
+            .onDisappear {
+                viewModel.cancelLivePreviewRefresh()
+            }
             .alert("确认删除这篇文章？", isPresented: $showDeleteConfirm) {
                 Button("删除", role: .destructive) {
                     viewModel.deleteCurrentPost()
+                    viewModel.cancelLivePreviewRefresh()
                     editorSelection = NSRange(location: 0, length: 0)
                     showingPreview = false
                     refreshInputsFromPost()
@@ -289,6 +341,30 @@ struct EditorView: View {
                 Button("取消", role: .cancel) {}
             } message: {
                 Text(viewModel.editorPost.fileName)
+            }
+            .sheet(isPresented: $showingPreviewSheet) {
+                VStack(spacing: 10) {
+                    HStack {
+                        Text("文章预览")
+                            .font(.headline)
+                        Spacer()
+                        Button("关闭") {
+                            showingPreviewSheet = false
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 8)
+
+                    HugoRenderedPreviewView(
+                        project: viewModel.project,
+                        postFileURL: viewModel.editorPost.fileURL,
+                        refreshToken: viewModel.previewRenderToken,
+                        markdownSource: viewModel.editorPost.body
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 12)
+                }
+                .frame(minWidth: 900, minHeight: 620)
             }
         }
     }

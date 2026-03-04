@@ -4,7 +4,9 @@ import Security
 
 final class CredentialStore {
     private let fm = FileManager.default
-    private let githubTokenService = "com.hugodesk.github.token"
+    private let githubTokenLegacyService = "com.hugodesk.github.token"
+    private let githubTokenClassicService = "com.hugodesk.github.token.classic"
+    private let githubTokenFineGrainedService = "com.hugodesk.github.token.fine-grained"
     private let aiAPIKeyService = "com.hugodesk.ai.api-key"
 
     func loadRemoteProfile(for projectRoot: String) -> RemoteProfile? {
@@ -21,12 +23,24 @@ final class CredentialStore {
         try data.write(to: profileURL(for: projectRoot), options: .atomic)
     }
 
-    func loadToken(for projectRoot: String) -> String {
-        loadSecret(service: githubTokenService, for: projectRoot)
+    func loadTokenClassic(for projectRoot: String) -> String {
+        let classic = loadSecret(service: githubTokenClassicService, for: projectRoot)
+        if !classic.isEmpty {
+            return classic
+        }
+        return loadSecret(service: githubTokenLegacyService, for: projectRoot)
     }
 
-    func saveToken(_ token: String, for projectRoot: String) {
-        saveSecret(token, service: githubTokenService, for: projectRoot)
+    func saveTokenClassic(_ token: String, for projectRoot: String) {
+        saveSecret(token, service: githubTokenClassicService, for: projectRoot)
+    }
+
+    func loadTokenFineGrained(for projectRoot: String) -> String {
+        loadSecret(service: githubTokenFineGrainedService, for: projectRoot)
+    }
+
+    func saveTokenFineGrained(_ token: String, for projectRoot: String) {
+        saveSecret(token, service: githubTokenFineGrainedService, for: projectRoot)
     }
 
     func loadAIProfile(for projectRoot: String) -> AIProfile {

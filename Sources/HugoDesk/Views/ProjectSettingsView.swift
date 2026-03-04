@@ -47,7 +47,7 @@ struct ProjectSettingsView: View {
                         SettingRow(
                             key: "project.contentSubpath",
                             title: "文章目录",
-                            helpText: "文章保存目录，默认 content/post。",
+                            helpText: "文章保存目录，默认自动识别 content/posts 或 content/post。",
                             scope: "内容管理"
                         ) {
                             TextField("content/post", text: $viewModel.project.contentSubpath)
@@ -93,22 +93,22 @@ struct ProjectSettingsView: View {
                         }
 
                         SettingRow(
-                            key: "profile.workflowName",
-                            title: "Workflow 名称",
-                            helpText: "用于匹配要显示状态的 GitHub Actions workflow。",
-                            scope: "状态查询"
+                            key: "keychain.githubTokenFineGrained",
+                            title: "GitHub Token（Fine-grained）",
+                            helpText: "用于 Git 推送与常规 API 查询。示例前缀：github_pat_...",
+                            scope: "发布流程"
                         ) {
-                            TextField("Deploy Hugo site to Pages", text: $viewModel.workflowName)
+                            TextField("github_pat_xxx", text: $viewModel.githubFineGrainedToken)
                                 .textFieldStyle(.roundedBorder)
                         }
 
                         SettingRow(
-                            key: "keychain.githubToken",
-                            title: "GitHub Token",
-                            helpText: "写入项目配置包并同步到系统钥匙串；项目配置包默认加入 .gitignore。",
-                            scope: "状态查询"
+                            key: "keychain.githubTokenClassic",
+                            title: "GitHub Token（Classic）",
+                            helpText: "Pages 来源检测/重置建议优先使用 Classic（需 repo/workflow/pages 相关权限）。示例前缀：ghp_...",
+                            scope: "Pages 检测"
                         ) {
-                            SecureField("ghp_xxx", text: $viewModel.githubToken)
+                            TextField("ghp_xxx", text: $viewModel.githubClassicToken)
                                 .textFieldStyle(.roundedBorder)
                         }
 
@@ -116,25 +116,14 @@ struct ProjectSettingsView: View {
                             Button("保存远程与令牌") {
                                 viewModel.saveRemoteProfile()
                             }
+                            Text("当前生效 Token：\(viewModel.githubTokenUsageSummary)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer(minLength: 6)
                             Text("配置会同步到项目根目录 .hugodesk.local.json，并写入系统 Keychain 作为兼容备份。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    }
-                }
-
-                ModernCard(title: "快捷操作") {
-                    HStack {
-                        Button("重新加载项目") {
-                            viewModel.loadAll()
-                        }
-                        Button("导出项目配置包") {
-                            viewModel.exportConfigBundleToProject()
-                        }
-                        Button("从项目配置包还原") {
-                            viewModel.importConfigBundleFromProject()
-                        }
-                        Spacer()
                     }
                 }
 
@@ -241,6 +230,9 @@ struct ProjectSettingsView: View {
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                         HStack {
+                            Button("重新加载项目") {
+                                viewModel.loadAll()
+                            }
                             Button("一键导出到项目目录") {
                                 viewModel.exportConfigBundleToProject()
                             }
@@ -249,7 +241,7 @@ struct ProjectSettingsView: View {
                             }
                             Spacer()
                         }
-                        Text("配置包包含项目设置、主题配置、远程信息、GitHub Token、AI API 信息。切换博客目录时会自动尝试读取该文件。")
+                        Text("配置包包含项目设置、主题配置、远程信息、GitHub Token（Classic/Fine-grained）与 AI API 信息。切换博客目录时会自动尝试读取该文件。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

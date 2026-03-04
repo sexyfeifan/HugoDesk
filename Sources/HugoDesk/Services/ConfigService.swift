@@ -72,7 +72,8 @@ final class ConfigService {
 
             case "frontmatter":
                 if key == "lastmod" {
-                    config.frontmatterTrackLastmod = true
+                    let normalized = value.replacingOccurrences(of: " ", with: "").lowercased()
+                    config.frontmatterTrackLastmod = normalized.contains(":filemodtime")
                 }
 
             case "services.googleAnalytics":
@@ -102,6 +103,120 @@ final class ConfigService {
     }
 
     func saveConfig(_ config: ThemeConfig, for project: BlogProject) throws {
+        let fileURL = project.configURL
+        if !FileManager.default.fileExists(atPath: fileURL.path) {
+            let output = buildManagedConfigLines(config).joined(separator: "\n") + "\n"
+            try output.write(to: fileURL, atomically: true, encoding: .utf8)
+            return
+        }
+
+        let existing = try String(contentsOf: fileURL, encoding: .utf8)
+        var editor = ConfigLineEditor(raw: existing)
+        applyManagedConfig(config, to: &editor)
+        let output = editor.rendered()
+        try output.write(to: fileURL, atomically: true, encoding: .utf8)
+    }
+
+    private func applyManagedConfig(_ config: ThemeConfig, to editor: inout ConfigLineEditor) {
+        editor.set(
+            key: "baseURL",
+            value: encodeString(config.baseURL),
+            section: nil
+        )
+        editor.set(
+            key: "languageCode",
+            value: encodeString(config.languageCode),
+            section: nil
+        )
+        editor.set(
+            key: "title",
+            value: encodeString(config.title),
+            section: nil
+        )
+        editor.set(
+            key: "theme",
+            value: encodeString(config.theme),
+            section: nil
+        )
+        editor.set(
+            key: "pygmentsCodeFences",
+            value: config.pygmentsCodeFences ? "true" : "false",
+            section: nil
+        )
+        editor.set(
+            key: "pygmentsUseClasses",
+            value: config.pygmentsUseClasses ? "true" : "false",
+            section: nil
+        )
+
+        editor.set(key: "author", value: encodeString(config.params.author), section: "params")
+        editor.set(key: "description", value: encodeString(config.params.description), section: "params", aliases: ["Description"])
+        editor.set(key: "tagline", value: encodeString(config.params.tagline), section: "params")
+        editor.set(key: "github", value: encodeString(config.params.github), section: "params")
+        editor.set(key: "twitter", value: encodeString(config.params.twitter), section: "params")
+        editor.set(key: "facebook", value: encodeString(config.params.facebook), section: "params")
+        editor.set(key: "linkedin", value: encodeString(config.params.linkedin), section: "params")
+        editor.set(key: "instagram", value: encodeString(config.params.instagram), section: "params")
+        editor.set(key: "tumblr", value: encodeString(config.params.tumblr), section: "params")
+        editor.set(key: "stackoverflow", value: encodeString(config.params.stackoverflow), section: "params")
+        editor.set(key: "bluesky", value: encodeString(config.params.bluesky), section: "params")
+        editor.set(key: "email", value: encodeString(config.params.email), section: "params", aliases: ["Email"])
+        editor.set(key: "url", value: encodeString(config.params.url), section: "params")
+        editor.set(key: "keywords", value: encodeString(config.params.keywords), section: "params", aliases: ["Keywords"])
+        editor.set(key: "favicon", value: encodeString(config.params.favicon), section: "params")
+        editor.set(key: "avatar", value: encodeString(config.params.avatar), section: "params")
+        editor.set(key: "headerIcon", value: encodeString(config.params.headerIcon), section: "params")
+        editor.set(key: "location", value: encodeString(config.params.location), section: "params")
+        editor.set(key: "userStatusEmoji", value: encodeString(config.params.userStatusEmoji), section: "params")
+        editor.set(key: "rss", value: config.params.rss ? "true" : "false", section: "params")
+        editor.set(key: "lastmod", value: config.params.lastmod ? "true" : "false", section: "params")
+        editor.set(key: "enableGitalk", value: config.params.enableGitalk ? "true" : "false", section: "params")
+        editor.set(key: "enableSearch", value: config.params.enableSearch ? "true" : "false", section: "params")
+        editor.set(key: "math", value: config.params.math ? "true" : "false", section: "params")
+        editor.set(key: "MathJax", value: config.params.mathJax ? "true" : "false", section: "params", aliases: ["mathJax"])
+        editor.set(key: "custom_css", value: encodeArray(config.params.customCSS), section: "params")
+        editor.set(key: "custom_js", value: encodeArray(config.params.customJS), section: "params")
+
+        editor.set(key: "clientID", value: encodeString(config.params.gitalk.clientID), section: "params.gitalk")
+        editor.set(key: "clientSecret", value: encodeString(config.params.gitalk.clientSecret), section: "params.gitalk")
+        editor.set(key: "repo", value: encodeString(config.params.gitalk.repo), section: "params.gitalk")
+        editor.set(key: "owner", value: encodeString(config.params.gitalk.owner), section: "params.gitalk")
+        editor.set(key: "admin", value: encodeString(config.params.gitalk.admin), section: "params.gitalk")
+        editor.set(key: "id", value: encodeString(config.params.gitalk.id), section: "params.gitalk")
+        editor.set(key: "labels", value: encodeString(config.params.gitalk.labels), section: "params.gitalk")
+        editor.set(key: "perPage", value: String(config.params.gitalk.perPage), section: "params.gitalk")
+        editor.set(key: "pagerDirection", value: encodeString(config.params.gitalk.pagerDirection), section: "params.gitalk")
+        editor.set(key: "createIssueManually", value: config.params.gitalk.createIssueManually ? "true" : "false", section: "params.gitalk")
+        editor.set(key: "distractionFreeMode", value: config.params.gitalk.distractionFreeMode ? "true" : "false", section: "params.gitalk")
+        editor.set(key: "proxy", value: encodeString(config.params.gitalk.proxy), section: "params.gitalk")
+
+        let linkBlocks = config.params.links.map { link in
+            var rows: [String] = []
+            rows.append("title = \(encodeString(link.title))")
+            rows.append("href = \(encodeString(link.href))")
+            if !link.icon.isEmpty {
+                rows.append("icon = \(encodeString(link.icon))")
+            }
+            return rows
+        }
+        editor.replaceArrayTable(name: "params.links", blocks: linkBlocks, preferredAnchorSection: "params.gitalk")
+
+        editor.set(
+            key: "lastmod",
+            value: config.frontmatterTrackLastmod
+                ? "[\"lastmod\", \":fileModTime\", \":default\"]"
+                : "[\":default\"]",
+            section: "frontmatter"
+        )
+
+        editor.set(key: "ID", value: encodeString(config.googleAnalyticsID), section: "services.googleAnalytics")
+        editor.set(key: "home", value: encodeArray(config.outputsHome), section: "outputs")
+        editor.set(key: "mediaType", value: encodeString(config.outputFormatJSONMediaType), section: "outputFormats.json")
+        editor.set(key: "baseName", value: encodeString(config.outputFormatJSONBaseName), section: "outputFormats.json")
+        editor.set(key: "isPlainText", value: config.outputFormatJSONIsPlainText ? "true" : "false", section: "outputFormats.json")
+    }
+
+    private func buildManagedConfigLines(_ config: ThemeConfig) -> [String] {
         var lines: [String] = []
 
         lines.append("baseURL = \(encodeString(config.baseURL))")
@@ -190,9 +305,7 @@ final class ConfigService {
         lines.append("  mediaType = \(encodeString(config.outputFormatJSONMediaType))")
         lines.append("  baseName = \(encodeString(config.outputFormatJSONBaseName))")
         lines.append("  isPlainText = \(config.outputFormatJSONIsPlainText ? "true" : "false")")
-
-        let output = lines.joined(separator: "\n") + "\n"
-        try output.write(to: project.configURL, atomically: true, encoding: .utf8)
+        return lines
     }
 
     private func applyParam(key: String, value: String, to config: inout ThemeConfig) {
@@ -221,7 +334,7 @@ final class ConfigService {
         case "enableGitalk": config.params.enableGitalk = parseBool(value)
         case "enableSearch": config.params.enableSearch = parseBool(value)
         case "math": config.params.math = parseBool(value)
-        case "MathJax": config.params.mathJax = parseBool(value)
+        case "MathJax", "mathJax": config.params.mathJax = parseBool(value)
         case "custom_css": config.params.customCSS = parseStringArray(value)
         case "custom_js": config.params.customJS = parseStringArray(value)
         default: break
@@ -319,4 +432,256 @@ final class ConfigService {
         }
         return "[" + values.map { encodeString($0) }.joined(separator: ", ") + "]"
     }
+}
+
+private struct ConfigLineEditor {
+    private var lines: [String]
+
+    init(raw: String) {
+        var parsed = raw.components(separatedBy: .newlines)
+        if parsed.last == "" {
+            parsed.removeLast()
+        }
+        lines = parsed
+    }
+
+    mutating func set(key: String, value: String, section: String?, aliases: [String] = []) {
+        let keys = Set([key] + aliases)
+        if let lineIndex = findKeyLine(section: section, keys: keys) {
+            let indent = leadingWhitespace(of: lines[lineIndex])
+            lines[lineIndex] = "\(indent)\(key) = \(value)"
+            return
+        }
+
+        if let section {
+            let sectionRef = ensureSection(named: section)
+            let indent = indentationForSection(sectionRef: sectionRef)
+            let insertAt = insertionIndexForSection(sectionRef: sectionRef)
+            lines.insert("\(indent)\(key) = \(value)", at: insertAt)
+        } else {
+            let insertAt = firstHeaderIndex() ?? lines.count
+            lines.insert("\(key) = \(value)", at: insertAt)
+        }
+    }
+
+    mutating func replaceArrayTable(name: String, blocks: [[String]], preferredAnchorSection: String?) {
+        removeArrayTable(named: name)
+        guard !blocks.isEmpty else {
+            return
+        }
+
+        var insertAt: Int
+        if let preferredAnchorSection,
+           let sectionRef = sectionReference(named: preferredAnchorSection) {
+            insertAt = insertionIndexForSection(sectionRef: sectionRef)
+        } else if let parent = name.split(separator: ".").dropLast().first, !parent.isEmpty,
+                  let sectionRef = sectionReference(named: String(parent)) {
+            insertAt = insertionIndexForSection(sectionRef: sectionRef)
+        } else {
+            insertAt = lines.count
+        }
+
+        if insertAt > 0 && !lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.insert("", at: insertAt)
+            insertAt += 1
+        }
+
+        for (idx, block) in blocks.enumerated() {
+            lines.insert("[[\(name)]]", at: insertAt)
+            insertAt += 1
+            for row in block {
+                lines.insert("  \(row)", at: insertAt)
+                insertAt += 1
+            }
+            if idx < blocks.count - 1 {
+                lines.insert("", at: insertAt)
+                insertAt += 1
+            }
+        }
+    }
+
+    func rendered() -> String {
+        var output = lines
+        while output.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
+            output.removeLast()
+        }
+        return output.joined(separator: "\n") + "\n"
+    }
+
+    private mutating func ensureSection(named name: String) -> SectionReference {
+        if let existing = sectionReference(named: name) {
+            return existing
+        }
+
+        if !lines.isEmpty, lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == false {
+            lines.append("")
+        }
+        lines.append("[\(name)]")
+        return SectionReference(headerIndex: lines.count - 1, endIndex: lines.count)
+    }
+
+    private func findKeyLine(section: String?, keys: Set<String>) -> Int? {
+        var currentSection: String?
+        var currentArraySection: String?
+
+        for index in lines.indices {
+            let raw = lines[index]
+            let trimmed = raw.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                continue
+            }
+
+            if let header = parseHeader(from: trimmed) {
+                if header.isArray {
+                    currentArraySection = header.name
+                    currentSection = nil
+                } else {
+                    currentSection = header.name
+                    currentArraySection = nil
+                }
+                continue
+            }
+
+            if currentArraySection != nil {
+                continue
+            }
+
+            if section == nil {
+                if currentSection != nil {
+                    continue
+                }
+            } else if currentSection != section {
+                continue
+            }
+
+            guard let assignment = parseAssignment(from: trimmed) else {
+                continue
+            }
+            if keys.contains(assignment.key) {
+                return index
+            }
+        }
+
+        return nil
+    }
+
+    private func firstHeaderIndex() -> Int? {
+        lines.indices.first(where: { parseHeader(from: lines[$0].trimmingCharacters(in: .whitespaces)) != nil })
+    }
+
+    private func sectionReference(named name: String) -> SectionReference? {
+        for idx in lines.indices {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            guard let header = parseHeader(from: trimmed), !header.isArray, header.name == name else {
+                continue
+            }
+
+            var end = lines.count
+            var cursor = idx + 1
+            while cursor < lines.count {
+                let line = lines[cursor].trimmingCharacters(in: .whitespaces)
+                if parseHeader(from: line) != nil {
+                    end = cursor
+                    break
+                }
+                cursor += 1
+            }
+            return SectionReference(headerIndex: idx, endIndex: end)
+        }
+        return nil
+    }
+
+    private func indentationForSection(sectionRef: SectionReference) -> String {
+        guard sectionRef.headerIndex < sectionRef.endIndex else {
+            return "  "
+        }
+        for idx in (sectionRef.headerIndex + 1)..<sectionRef.endIndex {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, !trimmed.hasPrefix("#") else {
+                continue
+            }
+            if parseHeader(from: trimmed) != nil {
+                continue
+            }
+            if parseAssignment(from: trimmed) != nil {
+                return leadingWhitespace(of: lines[idx])
+            }
+        }
+        return "  "
+    }
+
+    private func insertionIndexForSection(sectionRef: SectionReference) -> Int {
+        var insertAt = sectionRef.endIndex
+        while insertAt > sectionRef.headerIndex + 1 {
+            let previous = lines[insertAt - 1].trimmingCharacters(in: .whitespaces)
+            if previous.isEmpty {
+                insertAt -= 1
+                continue
+            }
+            break
+        }
+        return insertAt
+    }
+
+    private mutating func removeArrayTable(named name: String) {
+        var idx = 0
+        while idx < lines.count {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if let header = parseHeader(from: trimmed), header.isArray, header.name == name {
+                let start = idx
+                idx += 1
+                while idx < lines.count {
+                    let nextTrimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+                    if parseHeader(from: nextTrimmed) != nil {
+                        break
+                    }
+                    idx += 1
+                }
+                lines.removeSubrange(start..<idx)
+                idx = start
+                while idx > 0 && idx < lines.count
+                    && lines[idx - 1].trimmingCharacters(in: .whitespaces).isEmpty
+                    && lines[idx].trimmingCharacters(in: .whitespaces).isEmpty {
+                    lines.remove(at: idx)
+                }
+                continue
+            }
+            idx += 1
+        }
+    }
+
+    private func parseHeader(from trimmedLine: String) -> (name: String, isArray: Bool)? {
+        let headerCandidate = trimmedLine
+            .split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            .first?
+            .trimmingCharacters(in: .whitespaces) ?? trimmedLine
+
+        if headerCandidate.hasPrefix("[[") && headerCandidate.hasSuffix("]]") {
+            let name = String(headerCandidate.dropFirst(2).dropLast(2)).trimmingCharacters(in: .whitespaces)
+            return (name, true)
+        }
+        if headerCandidate.hasPrefix("[") && headerCandidate.hasSuffix("]") {
+            let name = String(headerCandidate.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
+            return (name, false)
+        }
+        return nil
+    }
+
+    private func parseAssignment(from trimmedLine: String) -> (key: String, value: String)? {
+        guard let idx = trimmedLine.firstIndex(of: "=") else {
+            return nil
+        }
+        let key = trimmedLine[..<idx].trimmingCharacters(in: .whitespaces)
+        let value = trimmedLine[trimmedLine.index(after: idx)...].trimmingCharacters(in: .whitespaces)
+        return (String(key), String(value))
+    }
+
+    private func leadingWhitespace(of line: String) -> String {
+        String(line.prefix { $0 == " " || $0 == "\t" })
+    }
+}
+
+private struct SectionReference {
+    var headerIndex: Int
+    var endIndex: Int
 }

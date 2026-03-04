@@ -628,6 +628,7 @@ final class PublishService {
         try fm.createDirectory(at: workflowURL.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         let workflow = """
+        # HugoDesk: managed workflow
         name: Deploy Hugo site to Pages
 
         on:
@@ -659,6 +660,7 @@ final class PublishService {
                 uses: actions/checkout@v4
                 with:
                   fetch-depth: 0
+                  submodules: recursive
 
               - name: Setup Hugo
                 uses: peaceiris/actions-hugo@v3
@@ -736,23 +738,21 @@ final class PublishService {
             guard ext == "yml" || ext == "yaml" else { return false }
             guard file.standardizedFileURL.path != canonical else { return false }
             guard let content = try? String(contentsOf: file, encoding: .utf8).lowercased() else { return false }
-            return content.contains("deploy hugo site to pages")
-                || content.contains("actions/deploy-pages")
+            let hasManagedMarker = content.contains("hugodesk: managed workflow")
+            let isHugoPagesTemplate = content.contains("name: deploy hugo site to pages")
+                && content.contains("peaceiris/actions-hugo@v3")
+                && content.contains("actions/deploy-pages@v4")
+            return hasManagedMarker || isHugoPagesTemplate
         }
     }
 
     private func inspectHugoStructure(project: BlogProject) -> HugoStructureReport {
-        let requiredConfigCandidates = [
-            "hugo.toml", "hugo.yaml", "hugo.yml", "hugo.json",
-            "config.toml", "config.yaml", "config.yml", "config.json",
-            "config/_default/hugo.toml", "config/_default/hugo.yaml", "config/_default/hugo.yml", "config/_default/hugo.json",
-            "config/_default/config.toml", "config/_default/config.yaml", "config/_default/config.yml", "config/_default/config.json"
-        ]
+        let requiredConfigCandidates = BlogProject.supportedConfigRelativePaths
         let hasConfig = requiredConfigCandidates.contains { fileExists(project: project, relativePath: $0) }
 
         var missingRequiredFiles: [String] = []
         if !hasConfig {
-            missingRequiredFiles.append("hugo.toml（或 config/_default/hugo.toml）")
+            missingRequiredFiles.append("hugo.toml")
         }
 
         var requiredDirectories = ["content"]

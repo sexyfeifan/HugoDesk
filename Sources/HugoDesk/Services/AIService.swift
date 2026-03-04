@@ -23,11 +23,12 @@ enum AIServiceError: LocalizedError {
 struct AIService {
     func formatMarkdown(input: String, profile: AIProfile, apiKey: String) async throws -> String {
         let prompt = """
-        请将以下内容整理为结构清晰、语义自然的 Markdown 文档：
-        1. 保留原文核心信息，不臆造事实。
-        2. 自动补齐合理标题、段落、列表、引用或代码块。
-        3. 保持中文表达自然，避免模板化口吻。
-        4. 仅输出 Markdown 正文，不要解释。
+        请对以下 Markdown 文本执行“排版与语法体检”，输出修正后的 Markdown：
+        1. 严格检查并修正 Markdown 符号正确性（标题层级、列表缩进、代码块围栏、链接/图片括号、引用、表格分隔线、转义符）。
+        2. 删除无意义字符、乱码、重复标点、孤立符号和明显噪音内容。
+        3. 不改变事实，不新增原文没有的信息。
+        4. 在不改变原意的前提下优化段落结构与可读性。
+        5. 仅输出最终 Markdown 正文，不要解释过程。
 
         原文如下：
         \(input)

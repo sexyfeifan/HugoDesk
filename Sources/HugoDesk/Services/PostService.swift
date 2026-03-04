@@ -6,8 +6,19 @@ final class PostService {
         let contentURL = project.contentURL
         try FileManager.default.createDirectory(at: contentURL, withIntermediateDirectories: true)
 
-        let files = try FileManager.default.contentsOfDirectory(at: contentURL, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension.lowercased() == "md" }
+        let enumerator = FileManager.default.enumerator(
+            at: contentURL,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        )
+        var files: [URL] = []
+        while let fileURL = enumerator?.nextObject() as? URL {
+            guard fileURL.pathExtension.lowercased() == "md" else { continue }
+            let values = try fileURL.resourceValues(forKeys: [.isRegularFileKey])
+            if values.isRegularFile == true {
+                files.append(fileURL)
+            }
+        }
 
         let posts = try files.map(loadPost)
         return posts.sorted { $0.date > $1.date }

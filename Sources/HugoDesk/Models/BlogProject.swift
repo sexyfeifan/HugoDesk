@@ -2,6 +2,12 @@ import Foundation
 
 struct BlogProject: Codable {
     static let lastRootPathDefaultsKey = "hugodesk.lastProjectRootPath"
+    static let supportedConfigRelativePaths: [String] = [
+        "hugo.toml", "hugo.yaml", "hugo.yml", "hugo.json",
+        "config.toml", "config.yaml", "config.yml", "config.json",
+        "config/_default/hugo.toml", "config/_default/hugo.yaml", "config/_default/hugo.yml", "config/_default/hugo.json",
+        "config/_default/config.toml", "config/_default/config.yaml", "config/_default/config.yml", "config/_default/config.json"
+    ]
 
     var rootPath: String
     var hugoExecutable: String
@@ -13,26 +19,47 @@ struct BlogProject: Codable {
         if let cachedRoot = UserDefaults.standard.string(forKey: lastRootPathDefaultsKey),
            !cachedRoot.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let cachedURL = URL(fileURLWithPath: cachedRoot, isDirectory: true)
-            let cachedConfig = cachedURL.appendingPathComponent("hugo.toml")
-            if FileManager.default.fileExists(atPath: cachedConfig.path) {
-                return BlogProject(rootPath: cachedURL.path, hugoExecutable: "hugo", contentSubpath: "content/post", gitRemote: "origin", publishBranch: "main")
+            if hasSupportedConfig(in: cachedURL) {
+                return BlogProject(
+                    rootPath: cachedURL.path,
+                    hugoExecutable: "hugo",
+                    contentSubpath: preferredContentSubpath(in: cachedURL),
+                    gitRemote: "origin",
+                    publishBranch: "main"
+                )
             }
         }
 
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let direct = cwd.appendingPathComponent("hugo.toml")
         let parent = cwd.deletingLastPathComponent()
-        let parentHugo = parent.appendingPathComponent("hugo.toml")
 
-        if FileManager.default.fileExists(atPath: direct.path) {
-            return BlogProject(rootPath: cwd.path, hugoExecutable: "hugo", contentSubpath: "content/post", gitRemote: "origin", publishBranch: "main")
+        if hasSupportedConfig(in: cwd) {
+            return BlogProject(
+                rootPath: cwd.path,
+                hugoExecutable: "hugo",
+                contentSubpath: preferredContentSubpath(in: cwd),
+                gitRemote: "origin",
+                publishBranch: "main"
+            )
         }
 
-        if FileManager.default.fileExists(atPath: parentHugo.path) {
-            return BlogProject(rootPath: parent.path, hugoExecutable: "hugo", contentSubpath: "content/post", gitRemote: "origin", publishBranch: "main")
+        if hasSupportedConfig(in: parent) {
+            return BlogProject(
+                rootPath: parent.path,
+                hugoExecutable: "hugo",
+                contentSubpath: preferredContentSubpath(in: parent),
+                gitRemote: "origin",
+                publishBranch: "main"
+            )
         }
 
-        return BlogProject(rootPath: cwd.path, hugoExecutable: "hugo", contentSubpath: "content/post", gitRemote: "origin", publishBranch: "main")
+        return BlogProject(
+            rootPath: cwd.path,
+            hugoExecutable: "hugo",
+            contentSubpath: preferredContentSubpath(in: cwd),
+            gitRemote: "origin",
+            publishBranch: "main"
+        )
     }
 
     var rootURL: URL {
@@ -44,7 +71,22 @@ struct BlogProject: Codable {
     }
 
     var configURL: URL {
-        rootURL.appendingPathComponent("hugo.toml")
+        if let relative = detectedConfigRelativePath {
+            return rootURL.appendingPathComponent(relative, isDirectory: false)
+        }
+        return rootURL.appendingPathComponent("hugo.toml", isDirectory: false)
+    }
+
+    var detectedConfigRelativePath: String? {
+        let fm = FileManager.default
+        for relative in Self.supportedConfigRelativePaths {
+            var isDirectory = ObjCBool(false)
+            let absolute = rootURL.appendingPathComponent(relative, isDirectory: false).path
+            if fm.fileExists(atPath: absolute, isDirectory: &isDirectory), !isDirectory.boolValue {
+                return relative
+            }
+        }
+        return nil
     }
 
     var staticImagesURL: URL {
@@ -79,5 +121,34 @@ struct BlogProject: Codable {
             rootURL.appendingPathComponent("public", isDirectory: true)
                 .appendingPathComponent(cleaned + ".html", isDirectory: false)
         ]
+    }
+
+    private static func hasSupportedConfig(in rootURL: URL) -> Bool {
+        let fm = FileManager.default
+        for relative in supportedConfigRelativePaths {
+            var isDirectory = ObjCBool(false)
+            let path = rootURL.appendingPathComponent(relative, isDirectory: false).path
+            if fm.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func preferredContentSubpath(in rootURL: URL) -> String {
+        let fm = FileManager.default
+        let posts = rootURL.appendingPathComponent("content/posts", isDirectory: true).path
+        var isDirectory = ObjCBool(false)
+        if fm.fileExists(atPath: posts, isDirectory: &isDirectory), isDirectory.boolValue {
+            return "content/posts"
+        }
+
+        let post = rootURL.appendingPathComponent("content/post", isDirectory: true).path
+        isDirectory = ObjCBool(false)
+        if fm.fileExists(atPath: post, isDirectory: &isDirectory), isDirectory.boolValue {
+            return "content/post"
+        }
+
+        return "content/posts"
     }
 }

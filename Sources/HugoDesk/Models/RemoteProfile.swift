@@ -33,4 +33,36 @@ struct WorkflowRunStatus {
         }
         return status
     }
+
+    var createdAtLocalText: String {
+        Self.localTimeText(fromISO8601: createdAt)
+    }
+
+    var updatedAtLocalText: String {
+        Self.localTimeText(fromISO8601: updatedAt)
+    }
+
+    private static func localTimeText(fromISO8601 raw: String) -> String {
+        guard let date = parseISO8601(raw) else {
+            return raw
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss zzz"
+        return formatter.string(from: date)
+    }
+
+    private static func parseISO8601(_ text: String) -> Date? {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: text) {
+            return date
+        }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: text)
+    }
 }

@@ -4,9 +4,11 @@ import SwiftUI
 @MainActor
 final class AppViewModel: ObservableObject {
     private let defaultWorkflowName = "Deploy Hugo site to Pages"
+    private let defaultPublishCommitMessage = "通过 HugoDesk 发布博客更新  🎉"
 
     @Published var project: BlogProject
     @Published var config: ThemeConfig = ThemeConfig()
+    @Published var detectedThemes: [DetectedTheme] = []
 
     @Published var posts: [BlogPost] = []
     @Published var selectedPostID: String?
@@ -17,20 +19,27 @@ final class AppViewModel: ObservableObject {
 
     @Published var publishLog: String = ""
     @Published var publishLogEntries: [PublishLogEntry] = []
-    @Published var publishMessage: String = "chore: 发布博客更新"
+    @Published var publishMessage: String = "通过 HugoDesk 发布博客更新  🎉"
     @Published var publishRemoteURL: String = ""
-    @Published var githubToken: String = ""
-    @Published var workflowName: String = "Deploy Hugo site to Pages"
+    @Published var githubFineGrainedToken: String = ""
+    @Published var githubClassicToken: String = ""
     @Published var previewRenderToken: Int = 0
     @Published var aiBaseURL: String = AIProfile.default.baseURL
     @Published var aiModel: String = AIProfile.default.model
     @Published var aiAPIKey: String = ""
     @Published var latestWorkflowStatus: WorkflowRunStatus?
     @Published var latestWorkflowError: String = ""
+    @Published var latestWorkflowCheckedAt: Date?
     @Published var pagesSiteStatus: GitHubPagesSiteStatus?
     @Published var pagesSiteError: String = ""
+    @Published var githubPingMilliseconds: Double?
+    @Published var githubConnectivityError: String = ""
+    @Published var isAIFormatting: Bool = false
+    @Published var aiFormattingProgress: Double = 0
+    @Published var aiFormattingStatus: String = ""
     @Published var lastHugoStructureReport: HugoStructureReport?
     @Published var showHugoStructureRepairPrompt: Bool = false
+    @Published var activeAlert: AppAlertItem?
     @Published var isBusy: Bool = false
     @Published var statusText: String = ""
 
@@ -42,6 +51,10 @@ final class AppViewModel: ObservableObject {
     private let pagesService = GitHubPagesService()
     private let credentialStore = CredentialStore()
     private let aiService = AIService()
+    private var livePreviewTask: Task<Void, Never>?
+    private var preflightMonitorTask: Task<Void, Never>?
+    private var actionsStatusMonitorTask: Task<Void, Never>?
+    private var aiFormattingProgressTask: Task<Void, Never>?
     private static let hugoToolOperationNames: Set<String> = [
         "检查 Hugo 版本",
         "升级 Hugo",
@@ -58,8 +71,73 @@ final class AppViewModel: ObservableObject {
         loadAll()
     }
 
+    deinit {
+        livePreviewTask?.cancel()
+        preflightMonitorTask?.cancel()
+        actionsStatusMonitorTask?.cancel()
+        aiFormattingProgressTask?.cancel()
+    }
+
     var localConfigBundlePath: String {
         project.localConfigBundleURL.path
+    }
+
+    var selectedDetectedTheme: DetectedTheme? {
+        let current = config.theme.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !current.isEmpty else { return nil }
+        return detectedThemes.first { $0.name.lowercased() == current }
+    }
+
+    var shouldShowGitalkSettings: Bool {
+        guard let theme = selectedDetectedTheme else { return true }
+        return !theme.hasCapabilitySignals || theme.supportsGitalk
+    }
+
+    var shouldShowSearchSettings: Bool {
+        guard let theme = selectedDetectedTheme else { return true }
+        return !theme.hasCapabilitySignals || theme.supportsSearch
+    }
+
+    var shouldShowLinksSettings: Bool {
+        guard let theme = selectedDetectedTheme else { return true }
+        return !theme.hasCapabilitySignals || theme.supportsLinks
+    }
+
+    var shouldShowMathSettings: Bool {
+        guard let theme = selectedDetectedTheme else { return true }
+        return !theme.hasCapabilitySignals || theme.supportsMath
+    }
+
+    var githubTokenUsageSummary: String {
+        let hasClassic = !githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasFine = !githubFineGrainedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        switch (hasClassic, hasFine) {
+        case (true, true):
+            return "Classic + Fine-grained（API 优先使用 Classic）"
+        case (true, false):
+            return "Classic"
+        case (false, true):
+            return "Fine-grained"
+        case (false, false):
+            return "未配置"
+        }
+    }
+
+    private var preferredGitHubToken: String {
+        let classic = githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !classic.isEmpty {
+            return classic
+        }
+        return githubFineGrainedToken.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var hasGitHubToken: Bool {
+        !preferredGitHubToken.isEmpty
+    }
+
+    private var normalizedPublishMessage: String {
+        let trimmed = publishMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultPublishCommitMessage : trimmed
     }
 
     func loadAll() {
@@ -68,6 +146,8 @@ final class AppViewModel: ObservableObject {
             loadRemoteProfile()
             loadAIProfile()
             let localBundleLoaded = loadLocalConfigBundleIfPresent()
+            normalizeContentSubpathIfNeeded(localBundleLoaded: localBundleLoaded)
+            refreshDetectedThemes()
             posts = try postService.loadPosts(for: project)
             if let first = posts.first {
                 selectedPostID = first.id
@@ -80,6 +160,8 @@ final class AppViewModel: ObservableObject {
         } catch {
             statusText = error.localizedDescription
         }
+        startPreflightMonitor()
+        startActionsStatusMonitor()
     }
 
     func setProjectRootPath(_ path: String) {
@@ -103,12 +185,15 @@ final class AppViewModel: ObservableObject {
         do {
             let profile = RemoteProfile(
                 remoteURL: publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines)
+                workflowName: defaultWorkflowName
             )
             try credentialStore.saveRemoteProfile(profile, for: project.rootPath)
-            credentialStore.saveToken(githubToken, for: project.rootPath)
+            credentialStore.saveTokenFineGrained(githubFineGrainedToken, for: project.rootPath)
+            credentialStore.saveTokenClassic(githubClassicToken, for: project.rootPath)
             try saveLocalConfigBundle()
             statusText = "远程与令牌设置已保存，并同步到项目配置包。"
+            Task { await self.runAllPreflightChecksSilently() }
+            startActionsStatusMonitor()
         } catch {
             statusText = error.localizedDescription
         }
@@ -259,10 +344,22 @@ final class AppViewModel: ObservableObject {
         do {
             try configService.saveConfig(config, for: project)
             try saveLocalConfigBundle()
+            refreshDetectedThemes()
             statusText = "hugo.toml 已保存，并同步到项目配置包。"
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    func selectTheme(named themeName: String) {
+        let trimmed = themeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        config.theme = trimmed
+        refreshDetectedThemes()
+    }
+
+    func refreshDetectedThemes() {
+        detectedThemes = Self.scanDetectedThemes(in: project.rootURL, configuredThemeName: config.theme)
     }
 
     func runBuild() {
@@ -319,132 +416,148 @@ final class AppViewModel: ObservableObject {
             let output = try self.publishService.syncWithRemote(
                 project: self.project,
                 remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
+                githubToken: self.preferredGitHubToken
             )
             return output.isEmpty ? "同步完成（无输出）。" : output
         }
     }
 
     func runPublish() {
-        runTask(operation: "提交并推送", successStatus: "推送完成。") {
-            let hasContent = !self.editorPost.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || !self.editorPost.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || FileManager.default.fileExists(atPath: self.editorPost.fileURL.path)
-            if hasContent {
-                try self.postService.savePost(self.editorPost)
-            }
-
-            let fixed = try self.imageAssetService.normalizePostImageLinks(project: self.project)
-            let output = try self.publishService.commitAndPush(
-                project: self.project,
-                message: self.publishMessage,
-                remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
-            )
-
-            if fixed.changedLinks > 0 {
-                return "已自动修正图片链接：\(fixed.changedLinks) 条，影响文件 \(fixed.changedFiles) 个。\n\n\(output)"
-            }
-            return output
-        }
+        runUnifiedPublishWorkflow(operation: "提交并推送")
     }
 
     func runGuidedPublishWorkflow() {
-        runAsyncTask(operation: "一键发布工作流", successStatus: "一键发布流程完成。") {
-            var logs: [String] = []
+        runUnifiedPublishWorkflow(operation: "一键发布")
+    }
 
-            let structure = self.publishService.checkHugoStructure(project: self.project)
-            self.lastHugoStructureReport = structure
-            guard !structure.hasMissingRequiredItems else {
-                self.showHugoStructureRepairPrompt = true
-                throw PublishWorkflowError.missingStructure(items: structure.missingRequiredItemsForPrompt)
-            }
-            logs.append(structure.renderCheckLog())
+    private func runUnifiedPublishWorkflow(operation: String) {
+        runAsyncTask(operation: operation, successStatus: "发布流程完成。") {
+            try await self.executeUnifiedPublishPipeline()
+        }
+    }
 
-            let sync = try self.publishService.syncWithRemote(
-                project: self.project,
-                remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
-            )
-            if !sync.isEmpty {
-                logs.append(sync)
-            }
+    private func executeUnifiedPublishPipeline() async throws -> String {
+        var logs: [String] = []
 
-            if self.publishService.hasGitHubPagesWorkflow(project: self.project) {
-                logs.append("== Pages Workflow ==\n已检测到 .github/workflows/hugo.yaml")
-            } else {
-                let workflow = try self.publishService.ensureGitHubPagesWorkflow(project: self.project)
-                logs.append("== 自动补齐 Pages Workflow ==\n\(workflow)")
-            }
+        let structure = publishService.checkHugoStructure(project: project)
+        lastHugoStructureReport = structure
+        guard !structure.hasMissingRequiredItems else {
+            showHugoStructureRepairPrompt = true
+            throw PublishWorkflowError.missingStructure(items: structure.missingRequiredItemsForPrompt)
+        }
+        logs.append(structure.renderCheckLog())
 
-            let remote = self.publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            let token = self.githubToken.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !remote.isEmpty, !token.isEmpty {
-                do {
-                    var pages = try await self.pagesService.fetchSiteStatus(remoteURL: remote, token: token)
+        try saveEditorPostIfNeeded()
+        let fixed = try imageAssetService.normalizePostImageLinks(project: project)
+        if fixed.changedLinks > 0 {
+            logs.append("== 图片链接归一化 ==\n已自动修正图片链接：\(fixed.changedLinks) 条，影响文件 \(fixed.changedFiles) 个。")
+        }
+
+        let remote = publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = preferredGitHubToken
+
+        let sync = try publishService.syncWithRemote(
+            project: project,
+            remoteURL: publishRemoteURL,
+            githubToken: token
+        )
+        if !sync.isEmpty {
+            logs.append(sync)
+        }
+
+        if publishService.hasGitHubPagesWorkflow(project: project) {
+            logs.append("== Pages Workflow ==\n已检测到 .github/workflows/hugo.yaml")
+        } else {
+            let workflow = try publishService.ensureGitHubPagesWorkflow(project: project)
+            logs.append("== 自动补齐 Pages Workflow ==\n\(workflow)")
+        }
+
+        if !remote.isEmpty, !token.isEmpty {
+            do {
+                var pages = try await pagesService.fetchSiteStatus(remoteURL: remote, token: token)
+                logs.append("""
+                == 检查 Pages 来源 ==
+                build_type: \(pages.buildType)
+                source: \(pages.sourceDescription)
+                访问地址: \(pages.htmlURL)
+                """)
+                if pages.buildType.lowercased() != "workflow" {
+                    pages = try await pagesService.switchToWorkflowBuild(
+                        remoteURL: remote,
+                        token: token,
+                        branch: project.publishBranch
+                    )
                     logs.append("""
-                    == 检查 Pages 来源 ==
+                    == 修复 Pages 来源 ==
                     build_type: \(pages.buildType)
                     source: \(pages.sourceDescription)
                     访问地址: \(pages.htmlURL)
                     """)
-                    if pages.buildType.lowercased() != "workflow" {
-                        pages = try await self.pagesService.switchToWorkflowBuild(
-                            remoteURL: remote,
-                            token: token,
-                            branch: self.project.publishBranch
-                        )
-                        logs.append("""
-                        == 修复 Pages 来源 ==
-                        build_type: \(pages.buildType)
-                        source: \(pages.sourceDescription)
-                        访问地址: \(pages.htmlURL)
-                        """)
-                    }
-                    self.pagesSiteStatus = pages
-                    self.pagesSiteError = ""
-                } catch {
-                    self.pagesSiteError = error.localizedDescription
-                    logs.append("== 检查/修复 Pages 来源 ==\n警告（已跳过，不阻断发布）：\(error.localizedDescription)")
                 }
-            } else {
-                logs.append("== 检查 Pages 来源 ==\n跳过：未配置远程地址或 GitHub Token。")
-            }
-
-            let publish = try self.publishService.commitAndPush(
-                project: self.project,
-                message: self.publishMessage,
-                remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
-            )
-            logs.append(publish)
-
-            if !remote.isEmpty, !token.isEmpty {
-                do {
-                    let run = try await self.actionsService.fetchLatestRun(
-                        remoteURL: remote,
-                        token: token,
-                        workflowName: self.workflowName
-                    )
-                    self.latestWorkflowStatus = run
-                    self.latestWorkflowError = ""
-                    logs.append("""
-                    == 最新 Actions 运行 ==
-                    Workflow: \(run.name)
-                    状态: \(run.statusText)
-                    分支: \(run.branch)
-                    提交: \(run.sha)
-                    详情: \(run.htmlURL)
-                    """)
-                } catch {
-                    self.latestWorkflowError = error.localizedDescription
-                    logs.append("== 最新 Actions 运行 ==\n警告：\(error.localizedDescription)")
+                pagesSiteStatus = pages
+                pagesSiteError = ""
+            } catch {
+                let hint: String
+                if githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   !githubFineGrainedToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    hint = "\n提示：当前仅配置 Fine-grained Token。若 Pages 来源检查/重置持续失败，建议在“项目 > 远程地址与凭据”补充 Classic Token。"
+                } else {
+                    hint = ""
                 }
-            } else {
-                logs.append("== 最新 Actions 运行 ==\n跳过：未配置远程地址或 GitHub Token。")
+                let message = error.localizedDescription + hint
+                pagesSiteError = message
+                presentAlert(title: "Pages 来源检查失败", message: message)
+                logs.append("== 检查/修复 Pages 来源 ==\n警告（已跳过，不阻断发布）：\(message)")
             }
+        } else {
+            logs.append("== 检查 Pages 来源 ==\n跳过：未配置远程地址或 GitHub Token。")
+        }
 
-            return logs.joined(separator: "\n\n")
+        let publish = try publishService.commitAndPush(
+            project: project,
+            message: normalizedPublishMessage,
+            remoteURL: publishRemoteURL,
+            githubToken: token
+        )
+        logs.append(publish)
+
+        if !remote.isEmpty, !token.isEmpty {
+            do {
+                let run = try await actionsService.fetchLatestRun(
+                    remoteURL: remote,
+                    token: token,
+                    workflowName: defaultWorkflowName,
+                    branch: project.publishBranch
+                )
+                latestWorkflowStatus = run
+                latestWorkflowError = ""
+                latestWorkflowCheckedAt = Date()
+                logs.append("""
+                == 最新 Actions 运行 ==
+                Workflow: \(run.name)
+                状态: \(run.statusText)
+                分支: \(run.branch)
+                提交: \(run.sha)
+                详情: \(run.htmlURL)
+                """)
+            } catch {
+                latestWorkflowError = error.localizedDescription
+                latestWorkflowCheckedAt = Date()
+                logs.append("== 最新 Actions 运行 ==\n警告：\(error.localizedDescription)")
+            }
+        } else {
+            logs.append("== 最新 Actions 运行 ==\n跳过：未配置远程地址或 GitHub Token。")
+        }
+
+        return logs.joined(separator: "\n\n")
+    }
+
+    private func saveEditorPostIfNeeded() throws {
+        let hasContent = !editorPost.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !editorPost.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || FileManager.default.fileExists(atPath: editorPost.fileURL.path)
+        if hasContent {
+            try postService.savePost(editorPost)
         }
     }
 
@@ -454,10 +567,12 @@ final class AppViewModel: ObservableObject {
             self.latestWorkflowStatus = nil
             let run = try await self.actionsService.fetchLatestRun(
                 remoteURL: self.publishRemoteURL,
-                token: self.githubToken,
-                workflowName: self.workflowName
+                token: self.preferredGitHubToken,
+                workflowName: self.defaultWorkflowName,
+                branch: self.project.publishBranch
             )
             self.latestWorkflowStatus = run
+            self.latestWorkflowCheckedAt = Date()
             return """
             Workflow: \(run.name)
             分支: \(run.branch)
@@ -474,7 +589,7 @@ final class AppViewModel: ObservableObject {
             self.pagesSiteStatus = nil
             let status = try await self.pagesService.fetchSiteStatus(
                 remoteURL: self.publishRemoteURL,
-                token: self.githubToken
+                token: self.preferredGitHubToken
             )
             self.pagesSiteStatus = status
             return """
@@ -490,7 +605,7 @@ final class AppViewModel: ObservableObject {
             self.pagesSiteError = ""
             let status = try await self.pagesService.switchToWorkflowBuild(
                 remoteURL: self.publishRemoteURL,
-                token: self.githubToken,
+                token: self.preferredGitHubToken,
                 branch: self.project.publishBranch
             )
             self.pagesSiteStatus = status
@@ -503,6 +618,11 @@ final class AppViewModel: ObservableObject {
     }
 
     func formatPostWithAI(selectionRange: NSRange?, onComplete: @escaping (NSRange) -> Void) {
+        guard !isAIFormatting else {
+            statusText = "AI 排版仍在进行中，请稍候。"
+            return
+        }
+
         let currentText = editorPost.body
         let ns = currentText as NSString
         let targetRange: NSRange = {
@@ -520,6 +640,7 @@ final class AppViewModel: ObservableObject {
         }
 
         isBusy = true
+        startAIFormattingProgress()
         Task {
             defer { isBusy = false }
             do {
@@ -538,9 +659,52 @@ final class AppViewModel: ObservableObject {
                 let nextRange = NSRange(location: targetRange.location + (formatted as NSString).length, length: 0)
                 onComplete(nextRange)
                 self.statusText = "AI Markdown 排版完成。"
+                self.finishAIFormattingProgress(success: true)
             } catch {
                 self.statusText = error.localizedDescription
+                self.finishAIFormattingProgress(success: false)
             }
+        }
+    }
+
+    private func startAIFormattingProgress() {
+        isAIFormatting = true
+        aiFormattingProgress = 0.05
+        aiFormattingStatus = "准备检查 Markdown 结构..."
+
+        aiFormattingProgressTask?.cancel()
+        aiFormattingProgressTask = Task { [weak self] in
+            let stages: [(UInt64, Double, String)] = [
+                (300_000_000, 0.18, "检查标题、列表与代码块边界..."),
+                (600_000_000, 0.36, "校验 Markdown 符号闭合正确性..."),
+                (900_000_000, 0.58, "清理无意义字符与重复标点..."),
+                (1_200_000_000, 0.78, "优化段落与语义结构..."),
+                (1_500_000_000, 0.90, "等待 AI 返回修正结果...")
+            ]
+            for stage in stages {
+                try? await Task.sleep(nanoseconds: stage.0)
+                guard let self, !Task.isCancelled else { return }
+                if self.isAIFormatting, self.aiFormattingProgress < stage.1 {
+                    self.aiFormattingProgress = stage.1
+                    self.aiFormattingStatus = stage.2
+                }
+            }
+        }
+    }
+
+    private func finishAIFormattingProgress(success: Bool) {
+        aiFormattingProgressTask?.cancel()
+        aiFormattingProgressTask = nil
+
+        aiFormattingProgress = success ? 1.0 : max(aiFormattingProgress, 0.1)
+        aiFormattingStatus = success ? "AI 排版完成。" : "AI 排版失败。"
+
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            guard let self else { return }
+            self.isAIFormatting = false
+            self.aiFormattingProgress = 0
+            self.aiFormattingStatus = ""
         }
     }
 
@@ -549,7 +713,7 @@ final class AppViewModel: ObservableObject {
             let report = try self.publishService.diagnosePublishEnvironment(
                 project: self.project,
                 remoteURL: self.publishRemoteURL,
-                githubToken: self.githubToken
+                githubToken: self.preferredGitHubToken
             )
             return report
         }
@@ -598,9 +762,10 @@ final class AppViewModel: ObservableObject {
             themeConfig: config,
             remoteProfile: RemoteProfile(
                 remoteURL: publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines),
-                workflowName: workflowName.trimmingCharacters(in: .whitespacesAndNewlines)
+                workflowName: defaultWorkflowName
             ),
-            githubToken: githubToken,
+            githubTokenClassic: githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines),
+            githubTokenFineGrained: githubFineGrainedToken.trimmingCharacters(in: .whitespacesAndNewlines),
             aiProfile: AIProfile(
                 baseURL: aiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
                 model: aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -633,15 +798,16 @@ final class AppViewModel: ObservableObject {
         applyProjectSettings(from: bundle.project)
         config = bundle.themeConfig
         publishRemoteURL = bundle.remoteProfile.remoteURL
-        workflowName = bundle.remoteProfile.workflowName.isEmpty ? defaultWorkflowName : bundle.remoteProfile.workflowName
-        githubToken = bundle.githubToken
+        githubClassicToken = bundle.githubTokenClassic
+        githubFineGrainedToken = bundle.githubTokenFineGrained
         aiBaseURL = bundle.aiProfile.baseURL.isEmpty ? AIProfile.default.baseURL : bundle.aiProfile.baseURL
         aiModel = bundle.aiProfile.model.isEmpty ? AIProfile.default.model : bundle.aiProfile.model
         aiAPIKey = bundle.aiAPIKey
 
         try configService.saveConfig(config, for: project)
         try credentialStore.saveRemoteProfile(bundle.remoteProfile, for: project.rootPath)
-        credentialStore.saveToken(bundle.githubToken, for: project.rootPath)
+        credentialStore.saveTokenClassic(bundle.githubTokenClassic, for: project.rootPath)
+        credentialStore.saveTokenFineGrained(bundle.githubTokenFineGrained, for: project.rootPath)
         try credentialStore.saveAIProfile(bundle.aiProfile, for: project.rootPath)
         credentialStore.saveAIAPIKey(bundle.aiAPIKey, for: project.rootPath)
         if persistToProjectBundle {
@@ -674,8 +840,12 @@ final class AppViewModel: ObservableObject {
             let bundle = try loadConfigBundle(from: project.localConfigBundleURL)
             applyProjectSettings(from: bundle.project)
             publishRemoteURL = bundle.remoteProfile.remoteURL
-            workflowName = bundle.remoteProfile.workflowName.isEmpty ? defaultWorkflowName : bundle.remoteProfile.workflowName
-            githubToken = bundle.githubToken.isEmpty ? credentialStore.loadToken(for: project.rootPath) : bundle.githubToken
+            githubClassicToken = bundle.githubTokenClassic.isEmpty
+                ? credentialStore.loadTokenClassic(for: project.rootPath)
+                : bundle.githubTokenClassic
+            githubFineGrainedToken = bundle.githubTokenFineGrained.isEmpty
+                ? credentialStore.loadTokenFineGrained(for: project.rootPath)
+                : bundle.githubTokenFineGrained
             aiBaseURL = bundle.aiProfile.baseURL.isEmpty ? AIProfile.default.baseURL : bundle.aiProfile.baseURL
             aiModel = bundle.aiProfile.model.isEmpty ? AIProfile.default.model : bundle.aiProfile.model
             aiAPIKey = bundle.aiAPIKey.isEmpty ? credentialStore.loadAIAPIKey(for: project.rootPath) : bundle.aiAPIKey
@@ -698,6 +868,35 @@ final class AppViewModel: ObservableObject {
         project.publishBranch = source.publishBranch
     }
 
+    private func normalizeContentSubpathIfNeeded(localBundleLoaded: Bool) {
+        guard !localBundleLoaded else {
+            return
+        }
+
+        let fm = FileManager.default
+        let current = project.contentSubpath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty {
+            var isDirectory = ObjCBool(false)
+            let currentPath = project.rootURL.appendingPathComponent(current, isDirectory: true).path
+            if fm.fileExists(atPath: currentPath, isDirectory: &isDirectory), isDirectory.boolValue {
+                return
+            }
+        }
+
+        let postsPath = project.rootURL.appendingPathComponent("content/posts", isDirectory: true).path
+        var isDirectory = ObjCBool(false)
+        if fm.fileExists(atPath: postsPath, isDirectory: &isDirectory), isDirectory.boolValue {
+            project.contentSubpath = "content/posts"
+            return
+        }
+
+        let postPath = project.rootURL.appendingPathComponent("content/post", isDirectory: true).path
+        isDirectory = ObjCBool(false)
+        if fm.fileExists(atPath: postPath, isDirectory: &isDirectory), isDirectory.boolValue {
+            project.contentSubpath = "content/post"
+        }
+    }
+
     private func persistProjectRootPath(_ path: String) {
         let normalized = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
@@ -709,6 +908,11 @@ final class AppViewModel: ObservableObject {
     func clearPublishLogs() {
         publishLogEntries.removeAll()
         publishLog = ""
+    }
+
+    func refreshPublishLogSnapshot() {
+        publishLog = publishLogEntries.map(\.rendered).joined(separator: "\n\n")
+        statusText = "日志已刷新。"
     }
 
     private func appendPublishLog(
@@ -760,6 +964,7 @@ final class AppViewModel: ObservableObject {
                     level: .error
                 )
                 statusText = "\(operation)失败，请查看日志。"
+                presentAlert(title: "\(operation)失败", message: errorText)
                 await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
         }
@@ -789,6 +994,7 @@ final class AppViewModel: ObservableObject {
                 )
                 if operation == "查询 Actions 状态" {
                     latestWorkflowError = ""
+                    latestWorkflowCheckedAt = Date()
                 }
                 if operation.contains("Pages") {
                     pagesSiteError = ""
@@ -798,6 +1004,7 @@ final class AppViewModel: ObservableObject {
                 let errorText = error.localizedDescription
                 if operation == "查询 Actions 状态" {
                     latestWorkflowError = errorText
+                    latestWorkflowCheckedAt = Date()
                 }
                 if operation.contains("Pages") {
                     pagesSiteError = errorText
@@ -809,9 +1016,14 @@ final class AppViewModel: ObservableObject {
                     level: .error
                 )
                 statusText = "\(operation)失败，请查看日志。"
+                presentAlert(title: "\(operation)失败", message: errorText)
                 await appendAITroubleshootingIfConfigured(operation: operation, errorLog: errorText)
             }
         }
+    }
+
+    private func presentAlert(title: String, message: String) {
+        activeAlert = AppAlertItem(title: title, message: message)
     }
 
     private func appendAITroubleshootingIfConfigured(operation: String, errorLog: String) async {
@@ -857,12 +1069,11 @@ final class AppViewModel: ObservableObject {
     private func loadRemoteProfile() {
         if let profile = credentialStore.loadRemoteProfile(for: project.rootPath) {
             publishRemoteURL = profile.remoteURL
-            workflowName = profile.workflowName.isEmpty ? defaultWorkflowName : profile.workflowName
         } else {
             publishRemoteURL = publishService.detectRemoteURL(project: project)
-            workflowName = defaultWorkflowName
         }
-        githubToken = credentialStore.loadToken(for: project.rootPath)
+        githubClassicToken = credentialStore.loadTokenClassic(for: project.rootPath)
+        githubFineGrainedToken = credentialStore.loadTokenFineGrained(for: project.rootPath)
     }
 
     private func loadAIProfile() {
@@ -870,6 +1081,348 @@ final class AppViewModel: ObservableObject {
         aiBaseURL = profile.baseURL
         aiModel = profile.model
         aiAPIKey = credentialStore.loadAIAPIKey(for: project.rootPath)
+    }
+
+    private func startPreflightMonitor() {
+        preflightMonitorTask?.cancel()
+        preflightMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runAllPreflightChecksSilently()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self.refreshGitHubConnectivitySilently()
+            }
+        }
+    }
+
+    private func startActionsStatusMonitor() {
+        actionsStatusMonitorTask?.cancel()
+        actionsStatusMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            await self.refreshActionsStatusSilently()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled else { return }
+                await self.refreshActionsStatusSilently()
+            }
+        }
+    }
+
+    private func runAllPreflightChecksSilently() async {
+        await refreshGitHubConnectivitySilently()
+        await refreshPagesSourceStatusSilently()
+        await refreshActionsStatusSilently()
+    }
+
+    private func refreshPagesSourceStatusSilently() async {
+        let remote = publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = preferredGitHubToken
+        guard !remote.isEmpty, !token.isEmpty else {
+            pagesSiteStatus = nil
+            pagesSiteError = ""
+            return
+        }
+
+        do {
+            let status = try await pagesService.fetchSiteStatus(remoteURL: remote, token: token)
+            pagesSiteStatus = status
+            pagesSiteError = ""
+        } catch {
+            pagesSiteStatus = nil
+            pagesSiteError = error.localizedDescription
+        }
+    }
+
+    private func refreshGitHubConnectivitySilently() async {
+        let result = await Self.measureGitHubPing(in: project.rootURL)
+        switch result {
+        case let .success(ms):
+            githubPingMilliseconds = ms
+            githubConnectivityError = ""
+        case let .failure(error):
+            githubPingMilliseconds = nil
+            githubConnectivityError = error.localizedDescription
+        }
+    }
+
+    private func refreshActionsStatusSilently() async {
+        let remote = publishRemoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let token = preferredGitHubToken
+        guard !remote.isEmpty, !token.isEmpty else {
+            latestWorkflowStatus = nil
+            latestWorkflowError = ""
+            latestWorkflowCheckedAt = Date()
+            return
+        }
+
+        do {
+            let run = try await actionsService.fetchLatestRun(
+                remoteURL: remote,
+                token: token,
+                workflowName: defaultWorkflowName,
+                branch: project.publishBranch
+            )
+            latestWorkflowStatus = run
+            latestWorkflowError = ""
+            latestWorkflowCheckedAt = Date()
+        } catch {
+            latestWorkflowError = error.localizedDescription
+            latestWorkflowCheckedAt = Date()
+        }
+    }
+
+    nonisolated private static func measureGitHubPing(in cwd: URL) async -> Result<Double, PingProbeError> {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                let runner = ProcessRunner()
+                do {
+                    let result = try runner.run(
+                        command: "/sbin/ping",
+                        arguments: ["-c", "1", "-t", "2", "github.com"],
+                        in: cwd
+                    )
+                    let joined = [result.stdout, result.stderr].joined(separator: "\n")
+                    if let ms = parsePingMilliseconds(from: joined) {
+                        continuation.resume(returning: .success(ms))
+                    } else {
+                        continuation.resume(returning: .failure(.message("未解析到 ping 延迟值。")))
+                    }
+                } catch let ProcessRunnerError.commandFailed(_, _, output) {
+                    continuation.resume(returning: .failure(.message(output.isEmpty ? "ping 执行失败。" : output)))
+                } catch {
+                    continuation.resume(returning: .failure(.message(error.localizedDescription)))
+                }
+            }
+        }
+    }
+
+    nonisolated private static func parsePingMilliseconds(from output: String) -> Double? {
+        let pattern = #"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let ns = output as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        guard let match = regex.firstMatch(in: output, range: range), match.numberOfRanges > 1 else {
+            return nil
+        }
+        let value = ns.substring(with: match.range(at: 1))
+        return Double(value)
+    }
+
+    nonisolated private static func scanDetectedThemes(in rootURL: URL, configuredThemeName: String) -> [DetectedTheme] {
+        let fm = FileManager.default
+        let themesRoot = rootURL.appendingPathComponent("themes", isDirectory: true)
+        var scannedThemes: [DetectedTheme] = []
+        var seenNames = Set<String>()
+
+        var isThemesDir = ObjCBool(false)
+        if fm.fileExists(atPath: themesRoot.path, isDirectory: &isThemesDir), isThemesDir.boolValue {
+            let directories = (try? fm.contentsOfDirectory(
+                at: themesRoot,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+
+            for dir in directories {
+                guard
+                    let values = try? dir.resourceValues(forKeys: [.isDirectoryKey]),
+                    values.isDirectory == true
+                else {
+                    continue
+                }
+                let name = dir.lastPathComponent
+                let key = name.lowercased()
+                guard !seenNames.contains(key) else { continue }
+                seenNames.insert(key)
+                scannedThemes.append(inspectThemeDirectory(dir, name: name))
+            }
+        }
+
+        let configured = configuredThemeName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !configured.isEmpty {
+            let configuredKey = configured.lowercased()
+            if !seenNames.contains(configuredKey) {
+                scannedThemes.append(
+                    DetectedTheme(
+                        name: configured,
+                        sourceDescription: "来自配置（未在 themes/ 下找到目录，可能为 Hugo Modules）",
+                        supportsGitalk: false,
+                        supportsSearch: false,
+                        supportsLinks: false,
+                        supportsMath: false,
+                        referencedParamKeys: []
+                    )
+                )
+            }
+        }
+
+        return scannedThemes.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+    }
+
+    nonisolated private static func inspectThemeDirectory(_ themeDirectoryURL: URL, name: String) -> DetectedTheme {
+        let fm = FileManager.default
+        let allowedExtensions: Set<String> = ["toml", "yaml", "yml", "json", "html", "htm", "xml", "md"]
+
+        var supportsGitalk = false
+        var supportsSearch = false
+        var supportsLinks = false
+        var supportsMath = false
+        var referencedKeys = Set<String>()
+        var scannedFiles = 0
+        let maxScannedFiles = 140
+
+        if let enumerator = fm.enumerator(
+            at: themeDirectoryURL,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) {
+            for case let fileURL as URL in enumerator {
+                guard scannedFiles < maxScannedFiles else { break }
+
+                guard allowedExtensions.contains(fileURL.pathExtension.lowercased()) else {
+                    continue
+                }
+
+                guard
+                    let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                    values.isRegularFile == true
+                else {
+                    continue
+                }
+
+                if let fileSize = values.fileSize, fileSize > 400_000 {
+                    continue
+                }
+
+                guard let content = readTextSnippet(at: fileURL) else {
+                    continue
+                }
+
+                scannedFiles += 1
+                let lower = content.lowercased()
+                if lower.contains("gitalk") { supportsGitalk = true }
+                if lower.contains("search") || lower.contains("fuse") || lower.contains("index.json") {
+                    supportsSearch = true
+                }
+                if lower.contains("params.links") || lower.contains(".site.params.links") {
+                    supportsLinks = true
+                }
+                if lower.contains("mathjax") || lower.contains("katex") || lower.contains(".site.params.math") {
+                    supportsMath = true
+                }
+
+                extractParamReferences(from: content, into: &referencedKeys)
+                if fileURL.pathExtension.lowercased() == "toml" {
+                    extractTomlParamKeys(from: content, into: &referencedKeys)
+                }
+            }
+        }
+
+        if referencedKeys.contains("gitalk") { supportsGitalk = true }
+        if referencedKeys.contains("enablesearch") || referencedKeys.contains("search") {
+            supportsSearch = true
+        }
+        if referencedKeys.contains("links") { supportsLinks = true }
+        if referencedKeys.contains("math") || referencedKeys.contains("mathjax") || referencedKeys.contains("katex") {
+            supportsMath = true
+        }
+
+        return DetectedTheme(
+            name: name,
+            sourceDescription: "themes/\(name)",
+            supportsGitalk: supportsGitalk,
+            supportsSearch: supportsSearch,
+            supportsLinks: supportsLinks,
+            supportsMath: supportsMath,
+            referencedParamKeys: referencedKeys.sorted()
+        )
+    }
+
+    nonisolated private static func readTextSnippet(at fileURL: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else {
+            return nil
+        }
+        defer { try? handle.close() }
+
+        let maxBytes = 200_000
+        guard let data = try? handle.read(upToCount: maxBytes) else {
+            return nil
+        }
+
+        if let utf8 = String(data: data, encoding: .utf8) {
+            return utf8
+        }
+        if let unicode = String(data: data, encoding: .unicode) {
+            return unicode
+        }
+        return nil
+    }
+
+    nonisolated private static func extractParamReferences(from text: String, into keys: inout Set<String>) {
+        let patterns = [
+            #"(?i)\.site\.params\.([a-z0-9_]+)"#,
+            #"(?i)\bparams\.([a-z0-9_]+)"#
+        ]
+
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for value in collectRegexCaptures(regex: regex, in: text) {
+                let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                guard !normalized.isEmpty else { continue }
+                keys.insert(normalized)
+            }
+        }
+    }
+
+    nonisolated private static func extractTomlParamKeys(from text: String, into keys: inout Set<String>) {
+        var inParamsSection = false
+        let lines = text.components(separatedBy: .newlines)
+
+        for raw in lines {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") {
+                continue
+            }
+
+            if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
+                let section = String(trimmed.dropFirst().dropLast())
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                inParamsSection = section == "params" || section.hasPrefix("params.")
+
+                if section.hasPrefix("params.") {
+                    let nested = String(section.dropFirst("params.".count))
+                    if let first = nested.split(separator: ".").first, !first.isEmpty {
+                        keys.insert(String(first))
+                    }
+                }
+                continue
+            }
+
+            guard inParamsSection, let equalIndex = trimmed.firstIndex(of: "=") else {
+                continue
+            }
+
+            let key = String(trimmed[..<equalIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !key.isEmpty else { continue }
+            keys.insert(key)
+        }
+    }
+
+    nonisolated private static func collectRegexCaptures(regex: NSRegularExpression, in text: String) -> [String] {
+        let ns = text as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        let matches = regex.matches(in: text, range: range)
+        return matches.compactMap { match in
+            guard match.numberOfRanges > 1 else { return nil }
+            return ns.substring(with: match.range(at: 1))
+        }
     }
 
     var hugoToolLogEntries: [PublishLogEntry] {
@@ -901,11 +1454,14 @@ final class AppViewModel: ObservableObject {
     func preflightChecks() -> [PublishCheck] {
         var checks: [PublishCheck] = []
 
-        let configExists = FileManager.default.fileExists(atPath: project.configURL.path)
+        let detectedConfig = project.detectedConfigRelativePath
+        let configExists = detectedConfig != nil
         checks.append(
             PublishCheck(
                 title: "项目配置文件",
-                detail: configExists ? "已找到 hugo.toml。" : "未找到 hugo.toml，请确认项目目录。",
+                detail: configExists
+                    ? "已找到 \(detectedConfig ?? "hugo.toml")。"
+                    : "未找到 Hugo 配置文件（支持 hugo.toml、config.toml、config/_default/hugo.toml 等）。",
                 level: configExists ? .ok : .error
             )
         )
@@ -928,49 +1484,31 @@ final class AppViewModel: ObservableObject {
             )
         )
 
-        let hasToken = !githubToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        checks.append(
-            PublishCheck(
-                title: "GitHub Token",
-                detail: hasToken ? "已配置（保存在系统钥匙串）。" : "未配置（公开仓库可不填，但可能受 API 限流）。",
-                level: hasToken ? .ok : .warning
-            )
-        )
-
-        let workflow = workflowName.trimmingCharacters(in: .whitespacesAndNewlines)
-        checks.append(
-            PublishCheck(
-                title: "Workflow 过滤名",
-                detail: workflow.isEmpty ? "空：将自动使用最新运行记录。" : workflow,
-                level: .ok
-            )
-        )
-
-        let workflowExists = publishService.hasGitHubPagesWorkflow(project: project)
-        checks.append(
-            PublishCheck(
-                title: "Pages Workflow",
-                detail: workflowExists ? "已检测到 .github/workflows/hugo.yaml。" : "未检测到 .github/workflows/hugo.yaml。",
-                level: workflowExists ? .ok : .error
-            )
-        )
-
-        let duplicateWorkflows = publishService.duplicatePagesWorkflowFileNames(project: project)
-        checks.append(
-            PublishCheck(
-                title: "重复 Workflow",
-                detail: duplicateWorkflows.isEmpty
-                    ? "未检测到重复 Pages workflow。"
-                    : "检测到重复 workflow：\(duplicateWorkflows.joined(separator: ", "))",
-                level: duplicateWorkflows.isEmpty ? .ok : .warning
-            )
-        )
-
         checks.append(
             PublishCheck(
                 title: "部署策略",
                 detail: "GitHub Actions（固定）",
                 level: .ok
+            )
+        )
+
+        let classic = githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fine = githubFineGrainedToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tokenDetail: String
+        if classic.isEmpty, fine.isEmpty {
+            tokenDetail = "未配置（公开仓库可不填，但 API 查询可能受限）。"
+        } else if !classic.isEmpty, !fine.isEmpty {
+            tokenDetail = "Classic + Fine-grained 已配置（Pages/Actions API 优先使用 Classic）。"
+        } else if !classic.isEmpty {
+            tokenDetail = "Classic 已配置。"
+        } else {
+            tokenDetail = "Fine-grained 已配置（若 Pages 来源检测失败，可补充 Classic Token）。"
+        }
+        checks.append(
+            PublishCheck(
+                title: "GitHub Token",
+                detail: tokenDetail,
+                level: hasGitHubToken ? .ok : .warning
             )
         )
 
@@ -989,7 +1527,7 @@ final class AppViewModel: ObservableObject {
             checks.append(
                 PublishCheck(
                     title: "Pages 来源",
-                    detail: "检查失败：\(pagesSiteError)",
+                    detail: "检测失败：\(pagesSiteError)",
                     level: .warning
                 )
             )
@@ -1003,12 +1541,51 @@ final class AppViewModel: ObservableObject {
             )
         }
 
+        let workflowExists = publishService.hasGitHubPagesWorkflow(project: project)
+        checks.append(
+            PublishCheck(
+                title: "Pages workflow",
+                detail: workflowExists ? "已检测到 .github/workflows/hugo.yaml。" : "未检测到 .github/workflows/hugo.yaml。",
+                level: workflowExists ? .ok : .error
+            )
+        )
+
+        let duplicateWorkflows = publishService.duplicatePagesWorkflowFileNames(project: project)
+        checks.append(
+            PublishCheck(
+                title: "重置 Pages workflow",
+                detail: duplicateWorkflows.isEmpty
+                    ? "无需重置，未检测到重复 workflow。"
+                    : "建议重置，检测到重复 workflow：\(duplicateWorkflows.joined(separator: ", "))",
+                level: duplicateWorkflows.isEmpty ? .ok : .warning
+            )
+        )
+
         let postCount = posts.count
         checks.append(
             PublishCheck(
                 title: "文章数量",
                 detail: "当前检测到 \(postCount) 篇文章。",
                 level: postCount == 0 ? .warning : .ok
+            )
+        )
+
+        let themeName = config.theme.trimmingCharacters(in: .whitespacesAndNewlines)
+        let themeDir = project.rootURL.appendingPathComponent("themes", isDirectory: true)
+            .appendingPathComponent(themeName, isDirectory: true)
+        var isThemeDir = ObjCBool(false)
+        let themeExists = !themeName.isEmpty
+            && FileManager.default.fileExists(atPath: themeDir.path, isDirectory: &isThemeDir)
+            && isThemeDir.boolValue
+        checks.append(
+            PublishCheck(
+                title: "当前主题",
+                detail: themeName.isEmpty
+                    ? "未设置 theme。"
+                    : (themeExists
+                        ? "\(themeName)（已检测到主题目录）"
+                        : "\(themeName)（未在 themes/ 下检测到目录，若使用 Hugo Modules 可忽略）"),
+                level: themeName.isEmpty ? .warning : (themeExists ? .ok : .warning)
             )
         )
 
@@ -1021,7 +1598,106 @@ final class AppViewModel: ObservableObject {
             )
         )
 
+        if let ping = githubPingMilliseconds {
+            let detail = String(format: "github.com RTT: %.1f ms（30 秒自动刷新）", ping)
+            checks.append(
+                PublishCheck(
+                    title: "GitHub 连通性",
+                    detail: detail,
+                    level: ping <= 250 ? .ok : .warning
+                )
+            )
+        } else if !githubConnectivityError.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            checks.append(
+                PublishCheck(
+                    title: "GitHub 连通性",
+                    detail: "检测失败：\(githubConnectivityError)",
+                    level: .warning
+                )
+            )
+        } else {
+            checks.append(
+                PublishCheck(
+                    title: "GitHub 连通性",
+                    detail: "正在检测 github.com 延迟（30 秒自动刷新）...",
+                    level: .warning
+                )
+            )
+        }
+
         return checks
+    }
+
+    func scheduleLivePreviewRefresh(immediate: Bool = false) {
+        livePreviewTask?.cancel()
+
+        let delayNanos: UInt64 = immediate ? 0 : 700_000_000
+        let projectSnapshot = project
+        let postSnapshot = editorPost
+
+        livePreviewTask = Task { [weak self] in
+            if delayNanos > 0 {
+                try? await Task.sleep(nanoseconds: delayNanos)
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            do {
+                try await Self.performLivePreviewBuild(project: projectSnapshot, post: postSnapshot)
+                guard !Task.isCancelled else {
+                    return
+                }
+                self?.previewRenderToken &+= 1
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+                self?.statusText = "实时预览更新失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    func cancelLivePreviewRefresh() {
+        livePreviewTask?.cancel()
+        livePreviewTask = nil
+    }
+
+    nonisolated private static func performLivePreviewBuild(project: BlogProject, post: BlogPost) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    let postService = PostService()
+                    let publishService = PublishService()
+                    let hasContent = !post.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !post.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || FileManager.default.fileExists(atPath: post.fileURL.path)
+                    if hasContent {
+                        try postService.savePost(post)
+                    }
+                    _ = try publishService.runHugoBuild(project: project)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
+
+struct AppAlertItem: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
+private enum PingProbeError: LocalizedError {
+    case message(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .message(text):
+            return text
+        }
     }
 }
 

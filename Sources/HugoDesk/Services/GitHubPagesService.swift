@@ -131,7 +131,7 @@ struct GitHubPagesService: Sendable {
                 throw GitHubPagesServiceError.invalidRepositoryURL
             }
             let owner = String(parts[0])
-            let repo = String(parts[1]).replacingOccurrences(of: ".git", with: "")
+            let repo = stripGitSuffix(String(parts[1]))
             return (owner, repo)
         }
 
@@ -144,8 +144,15 @@ struct GitHubPagesService: Sendable {
             throw GitHubPagesServiceError.invalidRepositoryURL
         }
         let owner = comps[0]
-        let repo = comps[1].replacingOccurrences(of: ".git", with: "")
+        let repo = stripGitSuffix(comps[1])
         return (owner, repo)
+    }
+
+    private func stripGitSuffix(_ name: String) -> String {
+        guard name.hasSuffix(".git") else {
+            return name
+        }
+        return String(name.dropLast(4))
     }
 
     private func pagesSettingsURL(for repo: (owner: String, name: String)) -> String {

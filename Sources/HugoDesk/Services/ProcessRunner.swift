@@ -44,6 +44,7 @@ final class ProcessRunner {
         environment: [String: String] = [:]
     ) throws -> ProcessResult {
         let process = Process()
+        let fm = FileManager.default
         process.currentDirectoryURL = cwd
         if !environment.isEmpty {
             var merged = ProcessInfo.processInfo.environment
@@ -61,18 +62,33 @@ final class ProcessRunner {
             process.arguments = [command] + arguments
         }
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        let tempRoot = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let stdoutURL = tempRoot.appendingPathComponent("hugodesk-\(UUID().uuidString)-stdout.log", isDirectory: false)
+        let stderrURL = tempRoot.appendingPathComponent("hugodesk-\(UUID().uuidString)-stderr.log", isDirectory: false)
+        fm.createFile(atPath: stdoutURL.path, contents: Data())
+        fm.createFile(atPath: stderrURL.path, contents: Data())
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? stdoutHandle.close()
+            try? stderrHandle.close()
+            try? fm.removeItem(at: stdoutURL)
+            try? fm.removeItem(at: stderrURL)
+        }
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
 
         let startedAt = Date()
         try process.run()
         process.waitUntilExit()
+        try stdoutHandle.synchronize()
+        try stderrHandle.synchronize()
+        try stdoutHandle.close()
+        try stderrHandle.close()
         let finishedAt = Date()
 
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdoutData = try Data(contentsOf: stdoutURL)
+        let stderrData = try Data(contentsOf: stderrURL)
 
         let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

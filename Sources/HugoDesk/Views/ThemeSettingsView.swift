@@ -10,6 +10,44 @@ struct ThemeSettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                ModernCard(title: "主题检测与选择", subtitle: "自动扫描 themes 目录并支持手动切换") {
+                    VStack(spacing: 10) {
+                        SettingRow(
+                            key: "themes/",
+                            title: "检测到的主题",
+                            helpText: "来源于博客目录 themes/ 下的子目录；若配置主题不在目录中，也会作为配置项保留。",
+                            scope: "主题"
+                        ) {
+                            Picker("", selection: themeSelectionBinding) {
+                                ForEach(themeOptions, id: \.self) { name in
+                                    Text(name).tag(name)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+
+                        HStack {
+                            Button("刷新主题检测") {
+                                viewModel.refreshDetectedThemes()
+                            }
+                            Text("当前：\(viewModel.config.theme)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
+
+                        if let detected = viewModel.selectedDetectedTheme {
+                            Text("\(detected.sourceDescription) · \(detected.capabilitySummary)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("当前主题来自手动配置，尚未检测到本地主题目录能力标签。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 ModernCard(title: "站点基础") {
                     VStack(spacing: 10) {
                         SettingRow(key: "baseURL", title: "站点地址", helpText: "网站最终访问地址，影响 canonical、RSS、分享链接。", scope: "全站") {
@@ -24,9 +62,14 @@ struct ThemeSettingsView: View {
                             TextField("站点标题", text: $viewModel.config.title)
                                 .textFieldStyle(.roundedBorder)
                         }
-                        SettingRow(key: "theme", title: "主题名称", helpText: "Hugo 使用的主题目录名。", scope: "渲染") {
-                            TextField("github-style", text: $viewModel.config.theme)
-                                .textFieldStyle(.roundedBorder)
+                        SettingRow(key: "theme", title: "主题名称", helpText: "手动输入主题目录名后点击“应用主题”，会按该主题能力刷新设置项。", scope: "渲染") {
+                            HStack {
+                                TextField("github-style", text: $viewModel.config.theme)
+                                    .textFieldStyle(.roundedBorder)
+                                Button("应用主题") {
+                                    viewModel.selectTheme(named: viewModel.config.theme)
+                                }
+                            }
                         }
                         SettingRow(key: "pygmentsCodeFences", title: "代码块高亮", helpText: "开启 fenced code block 语法高亮。", scope: "渲染") {
                             Toggle("", isOn: $viewModel.config.pygmentsCodeFences)
@@ -130,17 +173,23 @@ struct ThemeSettingsView: View {
                         SettingRow(key: "params.lastmod", title: "显示最后修改时间", helpText: "文章页显示 Modified 时间。", scope: "文章页") {
                             Toggle("", isOn: $viewModel.config.params.lastmod).labelsHidden()
                         }
-                        SettingRow(key: "params.enableSearch", title: "启用本地搜索", helpText: "开启后会使用 index.json 与 fuse.js。", scope: "搜索") {
-                            Toggle("", isOn: $viewModel.config.params.enableSearch).labelsHidden()
+                        if viewModel.shouldShowSearchSettings {
+                            SettingRow(key: "params.enableSearch", title: "启用本地搜索", helpText: "开启后会使用 index.json 与 fuse.js。", scope: "搜索") {
+                                Toggle("", isOn: $viewModel.config.params.enableSearch).labelsHidden()
+                            }
                         }
-                        SettingRow(key: "params.enableGitalk", title: "启用 Gitalk 评论", helpText: "文章底部加载 Gitalk 评论组件。", scope: "评论") {
-                            Toggle("", isOn: $viewModel.config.params.enableGitalk).labelsHidden()
+                        if viewModel.shouldShowGitalkSettings {
+                            SettingRow(key: "params.enableGitalk", title: "启用 Gitalk 评论", helpText: "文章底部加载 Gitalk 评论组件。", scope: "评论") {
+                                Toggle("", isOn: $viewModel.config.params.enableGitalk).labelsHidden()
+                            }
                         }
-                        SettingRow(key: "params.math", title: "启用 KaTeX", helpText: "全站默认启用 KaTeX 数学渲染。", scope: "文章渲染") {
-                            Toggle("", isOn: $viewModel.config.params.math).labelsHidden()
-                        }
-                        SettingRow(key: "params.MathJax", title: "启用 MathJax", helpText: "全站默认启用 MathJax（与 KaTeX 可同时存在但不建议）。", scope: "文章渲染") {
-                            Toggle("", isOn: $viewModel.config.params.mathJax).labelsHidden()
+                        if viewModel.shouldShowMathSettings {
+                            SettingRow(key: "params.math", title: "启用 KaTeX", helpText: "全站默认启用 KaTeX 数学渲染。", scope: "文章渲染") {
+                                Toggle("", isOn: $viewModel.config.params.math).labelsHidden()
+                            }
+                            SettingRow(key: "params.MathJax", title: "启用 MathJax", helpText: "全站默认启用 MathJax（与 KaTeX 可同时存在但不建议）。", scope: "文章渲染") {
+                                Toggle("", isOn: $viewModel.config.params.mathJax).labelsHidden()
+                            }
                         }
                         SettingRow(key: "frontmatter.lastmod", title: "根据文件更新时间追踪 lastmod", helpText: "使用 :fileModTime 自动生成文章最后更新时间。", scope: "文章元数据") {
                             Toggle("", isOn: $viewModel.config.frontmatterTrackLastmod).labelsHidden()
@@ -148,22 +197,31 @@ struct ThemeSettingsView: View {
                         SettingRow(key: "services.googleAnalytics.ID", title: "Google Analytics ID", helpText: "生产环境 HUGO_ENV=production 时生效。", scope: "统计") {
                             TextField("", text: $viewModel.config.googleAnalyticsID).textFieldStyle(.roundedBorder)
                         }
+
+                        if !viewModel.shouldShowSearchSettings || !viewModel.shouldShowGitalkSettings || !viewModel.shouldShowMathSettings {
+                            Text("已根据当前主题能力自动精简部分功能开关。若需手动覆盖，可在上方切换主题或手动输入主题名后应用。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
 
-                ModernCard(title: "搜索输出格式") {
-                    VStack(spacing: 10) {
-                        SettingRow(key: "outputs.home", title: "首页输出类型", helpText: "要开启本地搜索，通常需要包含 html 与 json。", scope: "搜索") {
-                            TextField("html, json", text: $outputsInput).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "outputFormats.json.mediaType", title: "JSON 媒体类型", helpText: "一般保持 application/json。", scope: "搜索") {
-                            TextField("application/json", text: $viewModel.config.outputFormatJSONMediaType).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "outputFormats.json.baseName", title: "JSON 文件名", helpText: "默认 index，对应 /index.json。", scope: "搜索") {
-                            TextField("index", text: $viewModel.config.outputFormatJSONBaseName).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "outputFormats.json.isPlainText", title: "JSON 纯文本输出", helpText: "通常保持 false。", scope: "搜索") {
-                            Toggle("", isOn: $viewModel.config.outputFormatJSONIsPlainText).labelsHidden()
+                if viewModel.shouldShowSearchSettings {
+                    ModernCard(title: "搜索输出格式") {
+                        VStack(spacing: 10) {
+                            SettingRow(key: "outputs.home", title: "首页输出类型", helpText: "要开启本地搜索，通常需要包含 html 与 json。", scope: "搜索") {
+                                TextField("html, json", text: $outputsInput).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "outputFormats.json.mediaType", title: "JSON 媒体类型", helpText: "一般保持 application/json。", scope: "搜索") {
+                                TextField("application/json", text: $viewModel.config.outputFormatJSONMediaType).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "outputFormats.json.baseName", title: "JSON 文件名", helpText: "默认 index，对应 /index.json。", scope: "搜索") {
+                                TextField("index", text: $viewModel.config.outputFormatJSONBaseName).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "outputFormats.json.isPlainText", title: "JSON 纯文本输出", helpText: "通常保持 false。", scope: "搜索") {
+                                Toggle("", isOn: $viewModel.config.outputFormatJSONIsPlainText).labelsHidden()
+                            }
                         }
                     }
                 }
@@ -194,75 +252,79 @@ struct ThemeSettingsView: View {
                     }
                 }
 
-                ModernCard(title: "Gitalk 评论配置") {
-                    VStack(spacing: 10) {
-                        SettingRow(key: "params.gitalk.clientID", title: "OAuth Client ID", helpText: "Gitalk GitHub OAuth 应用 ID。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.clientID).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.clientSecret", title: "OAuth Client Secret", helpText: "Gitalk GitHub OAuth 密钥。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.clientSecret).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.repo", title: "评论仓库", helpText: "存放 issue 评论的仓库名。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.repo).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.owner", title: "仓库所有者", helpText: "GitHub 用户名或组织名。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.owner).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.admin", title: "管理员", helpText: "管理员用户名（当前主题模板仍以 owner 为主）。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.admin).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.id", title: "Issue ID 规则", helpText: "通常为 location.pathname，保证文章唯一映射。", scope: "评论") {
-                            TextField("location.pathname", text: $viewModel.config.params.gitalk.id).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.labels", title: "Issue 标签", helpText: "新建评论 issue 时默认标签。", scope: "评论") {
-                            TextField("gitalk", text: $viewModel.config.params.gitalk.labels).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.perPage", title: "每页评论数", helpText: "评论分页数量，最大 100。", scope: "评论") {
-                            Stepper(value: $viewModel.config.params.gitalk.perPage, in: 1...100) {
-                                Text("\(viewModel.config.params.gitalk.perPage)")
+                if viewModel.shouldShowGitalkSettings {
+                    ModernCard(title: "Gitalk 评论配置") {
+                        VStack(spacing: 10) {
+                            SettingRow(key: "params.gitalk.clientID", title: "OAuth Client ID", helpText: "Gitalk GitHub OAuth 应用 ID。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.clientID).textFieldStyle(.roundedBorder)
                             }
-                        }
-                        SettingRow(key: "params.gitalk.pagerDirection", title: "评论排序", helpText: "last 或 first。", scope: "评论") {
-                            TextField("last / first", text: $viewModel.config.params.gitalk.pagerDirection).textFieldStyle(.roundedBorder)
-                        }
-                        SettingRow(key: "params.gitalk.createIssueManually", title: "手动创建 Issue", helpText: "true 表示管理员登录后自动创建 issue。", scope: "评论") {
-                            Toggle("", isOn: $viewModel.config.params.gitalk.createIssueManually).labelsHidden()
-                        }
-                        SettingRow(key: "params.gitalk.distractionFreeMode", title: "无干扰模式", helpText: "评论输入框快捷提交模式。", scope: "评论") {
-                            Toggle("", isOn: $viewModel.config.params.gitalk.distractionFreeMode).labelsHidden()
-                        }
-                        SettingRow(key: "params.gitalk.proxy", title: "代理地址", helpText: "GitHub OAuth 代理地址。", scope: "评论") {
-                            TextField("", text: $viewModel.config.params.gitalk.proxy).textFieldStyle(.roundedBorder)
+                            SettingRow(key: "params.gitalk.clientSecret", title: "OAuth Client Secret", helpText: "Gitalk GitHub OAuth 密钥。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.clientSecret).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.repo", title: "评论仓库", helpText: "存放 issue 评论的仓库名。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.repo).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.owner", title: "仓库所有者", helpText: "GitHub 用户名或组织名。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.owner).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.admin", title: "管理员", helpText: "管理员用户名（当前主题模板仍以 owner 为主）。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.admin).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.id", title: "Issue ID 规则", helpText: "通常为 location.pathname，保证文章唯一映射。", scope: "评论") {
+                                TextField("location.pathname", text: $viewModel.config.params.gitalk.id).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.labels", title: "Issue 标签", helpText: "新建评论 issue 时默认标签。", scope: "评论") {
+                                TextField("gitalk", text: $viewModel.config.params.gitalk.labels).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.perPage", title: "每页评论数", helpText: "评论分页数量，最大 100。", scope: "评论") {
+                                Stepper(value: $viewModel.config.params.gitalk.perPage, in: 1...100) {
+                                    Text("\(viewModel.config.params.gitalk.perPage)")
+                                }
+                            }
+                            SettingRow(key: "params.gitalk.pagerDirection", title: "评论排序", helpText: "last 或 first。", scope: "评论") {
+                                TextField("last / first", text: $viewModel.config.params.gitalk.pagerDirection).textFieldStyle(.roundedBorder)
+                            }
+                            SettingRow(key: "params.gitalk.createIssueManually", title: "手动创建 Issue", helpText: "true 表示管理员登录后自动创建 issue。", scope: "评论") {
+                                Toggle("", isOn: $viewModel.config.params.gitalk.createIssueManually).labelsHidden()
+                            }
+                            SettingRow(key: "params.gitalk.distractionFreeMode", title: "无干扰模式", helpText: "评论输入框快捷提交模式。", scope: "评论") {
+                                Toggle("", isOn: $viewModel.config.params.gitalk.distractionFreeMode).labelsHidden()
+                            }
+                            SettingRow(key: "params.gitalk.proxy", title: "代理地址", helpText: "GitHub OAuth 代理地址。", scope: "评论") {
+                                TextField("", text: $viewModel.config.params.gitalk.proxy).textFieldStyle(.roundedBorder)
+                            }
                         }
                     }
                 }
 
-                ModernCard(title: "自定义外链（params.links）") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(Array(viewModel.config.params.links.enumerated()), id: \.element.id) { index, _ in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Text("链接 \(index + 1)")
-                                        .font(.headline)
-                                    ScopeBadge(text: "侧栏")
-                                    Spacer()
-                                    Button("删除") {
-                                        viewModel.config.params.links.remove(at: index)
+                if viewModel.shouldShowLinksSettings {
+                    ModernCard(title: "自定义外链（params.links）") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(Array(viewModel.config.params.links.enumerated()), id: \.element.id) { index, _ in
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack {
+                                        Text("链接 \(index + 1)")
+                                            .font(.headline)
+                                        ScopeBadge(text: "侧栏")
+                                        Spacer()
+                                        Button("删除") {
+                                            viewModel.config.params.links.remove(at: index)
+                                        }
                                     }
+                                    TextField("title", text: bindingForLink(index, \.title))
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("href", text: bindingForLink(index, \.href))
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("icon（可选）", text: bindingForLink(index, \.icon))
+                                        .textFieldStyle(.roundedBorder)
                                 }
-                                TextField("title", text: bindingForLink(index, \.title))
-                                    .textFieldStyle(.roundedBorder)
-                                TextField("href", text: bindingForLink(index, \.href))
-                                    .textFieldStyle(.roundedBorder)
-                                TextField("icon（可选）", text: bindingForLink(index, \.icon))
-                                    .textFieldStyle(.roundedBorder)
+                                .padding(10)
+                                .background(Color.black.opacity(0.03))
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
                             }
-                            .padding(10)
-                            .background(Color.black.opacity(0.03))
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        Button("新增链接") {
-                            viewModel.config.params.links.append(ThemeLink())
+                            Button("新增链接") {
+                                viewModel.config.params.links.append(ThemeLink())
+                            }
                         }
                     }
                 }
@@ -283,8 +345,43 @@ struct ThemeSettingsView: View {
             .padding()
         }
         .onAppear {
+            viewModel.refreshDetectedThemes()
             syncTextInputs()
         }
+    }
+
+    private var themeOptions: [String] {
+        var names = viewModel.detectedThemes.map(\.name)
+        let current = viewModel.config.theme.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty && !containsTheme(current, in: names) {
+            names.append(current)
+        }
+        if names.isEmpty {
+            names.append("github-style")
+        }
+        return names.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    private var themeSelectionBinding: Binding<String> {
+        Binding(
+            get: {
+                let current = viewModel.config.theme.trimmingCharacters(in: .whitespacesAndNewlines)
+                if current.isEmpty {
+                    return themeOptions.first ?? "github-style"
+                }
+                return current
+            },
+            set: { newValue in
+                viewModel.selectTheme(named: newValue)
+            }
+        )
+    }
+
+    private func containsTheme(_ themeName: String, in names: [String]) -> Bool {
+        let lower = themeName.lowercased()
+        return names.contains { $0.lowercased() == lower }
     }
 
     private func bindingForLink(_ index: Int, _ keyPath: WritableKeyPath<ThemeLink, String>) -> Binding<String> {

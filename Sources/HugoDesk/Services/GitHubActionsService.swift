@@ -24,12 +24,63 @@ struct GitHubActionsService: Sendable {
     func fetchLatestRun(
         remoteURL: String,
         token: String,
-        workflowName: String
+        workflowName: String,
+        branch: String? = nil
     ) async throws -> WorkflowRunStatus {
         let repo = try parseRepo(from: remoteURL)
-        let endpoint = URL(string: "https://api.github.com/repos/\(repo.owner)/\(repo.name)/actions/runs?per_page=20")!
+        let branchValue = branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        var request = URLRequest(url: endpoint)
+        // Prefer querying the managed workflow file directly to avoid stale runs from unrelated workflows.
+        if let workflowURL = buildActionsURL(
+            "https://api.github.com/repos/\(repo.owner)/\(repo.name)/actions/workflows/hugo.yaml/runs",
+            perPage: 20,
+            branch: branchValue
+        ) {
+            do {
+                let decoded = try await requestWorkflowRuns(url: workflowURL, token: token)
+                if let run = decoded.workflowRuns.first {
+                    return makeStatus(from: run, note: branchValue.isEmpty ? nil : "已按分支 \(branchValue) 过滤。")
+                }
+            } catch GitHubActionsError.httpError(let code, _) where code == 404 {
+                // Fallback to generic runs endpoint when workflow file path is unavailable.
+            }
+        }
+
+        guard let endpoint = buildActionsURL(
+            "https://api.github.com/repos/\(repo.owner)/\(repo.name)/actions/runs",
+            perPage: 50,
+            branch: branchValue
+        ) else {
+            throw GitHubActionsError.invalidRepositoryURL
+        }
+
+        let decoded = try await requestWorkflowRuns(url: endpoint, token: token)
+        let picked: WorkflowRunItem?
+        var note: String?
+        if workflowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            picked = decoded.workflowRuns.first
+        } else {
+            picked = decoded.workflowRuns.first {
+                $0.name.localizedCaseInsensitiveContains(workflowName)
+            }
+            if picked == nil {
+                note = "未匹配到指定 workflow，已回退为最近一次运行。"
+            }
+        }
+
+        let finalRun = picked ?? decoded.workflowRuns.first
+        guard let run = finalRun else {
+            throw GitHubActionsError.noRunsFound
+        }
+
+        if note == nil, !branchValue.isEmpty {
+            note = "已按分支 \(branchValue) 过滤。"
+        }
+        return makeStatus(from: run, note: note)
+    }
+
+    private func requestWorkflowRuns(url: URL, token: String) async throws -> WorkflowRunsResponse {
+        var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("HugoDesk", forHTTPHeaderField: "User-Agent")
@@ -43,27 +94,25 @@ struct GitHubActionsService: Sendable {
             let body = String(data: data, encoding: .utf8) ?? ""
             throw GitHubActionsError.httpError(code, body)
         }
+        return try JSONDecoder().decode(WorkflowRunsResponse.self, from: data)
+    }
 
-        let decoded = try JSONDecoder().decode(WorkflowRunsResponse.self, from: data)
-        let picked: WorkflowRunItem?
-        var note: String?
-        if workflowName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            picked = decoded.workflowRuns.first
-        } else {
-            picked = decoded.workflowRuns.first {
-                $0.name.localizedCaseInsensitiveContains(workflowName)
-            }
-            if picked == nil {
-                note = "未匹配到指定 workflow，已回退为最新运行记录。"
-            }
+    private func buildActionsURL(_ base: String, perPage: Int, branch: String) -> URL? {
+        guard var components = URLComponents(string: base) else {
+            return nil
         }
-
-        let finalRun = picked ?? decoded.workflowRuns.first
-        guard let run = finalRun else {
-            throw GitHubActionsError.noRunsFound
+        var queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "per_page", value: String(perPage))
+        ]
+        if !branch.isEmpty {
+            queryItems.append(URLQueryItem(name: "branch", value: branch))
         }
+        components.queryItems = queryItems
+        return components.url
+    }
 
-        return WorkflowRunStatus(
+    private func makeStatus(from run: WorkflowRunItem, note: String?) -> WorkflowRunStatus {
+        WorkflowRunStatus(
             name: run.name,
             status: run.status,
             conclusion: run.conclusion,
@@ -86,7 +135,7 @@ struct GitHubActionsService: Sendable {
                 throw GitHubActionsError.invalidRepositoryURL
             }
             let owner = String(parts[0])
-            let repo = String(parts[1]).replacingOccurrences(of: ".git", with: "")
+            let repo = stripGitSuffix(String(parts[1]))
             return (owner, repo)
         }
 
@@ -99,8 +148,15 @@ struct GitHubActionsService: Sendable {
             throw GitHubActionsError.invalidRepositoryURL
         }
         let owner = comps[0]
-        let repo = comps[1].replacingOccurrences(of: ".git", with: "")
+        let repo = stripGitSuffix(comps[1])
         return (owner, repo)
+    }
+
+    private func stripGitSuffix(_ name: String) -> String {
+        guard name.hasSuffix(".git") else {
+            return name
+        }
+        return String(name.dropLast(4))
     }
 }
 

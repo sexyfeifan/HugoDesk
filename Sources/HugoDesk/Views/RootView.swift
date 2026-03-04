@@ -86,5 +86,12 @@ struct RootView: View {
                 .padding(.vertical, 8)
             }
         }
+        .alert(item: $viewModel.activeAlert) { item in
+            Alert(
+                title: Text(item.title),
+                message: Text(item.message),
+                dismissButton: .default(Text("我知道了"))
+            )
+        }
     }
 }
