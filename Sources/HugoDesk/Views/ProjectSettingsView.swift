@@ -135,6 +135,19 @@ struct ProjectSettingsView: View {
                         Button("从项目配置包还原") {
                             viewModel.importConfigBundleFromProject()
                         }
+                        Spacer()
+                    }
+                }
+
+                ModernCard(title: "Hugo 工具", subtitle: "本机 Hugo 常用命令") {
+                    HStack {
+                        Button("检查 Hugo 版本") {
+                            viewModel.runHugoVersionCheck()
+                        }
+                        Button("升级 Hugo（Homebrew）") {
+                            viewModel.runHugoUpgrade()
+                        }
+                        Spacer()
                     }
                 }
 

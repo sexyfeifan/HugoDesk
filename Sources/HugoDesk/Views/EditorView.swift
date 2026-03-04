@@ -215,17 +215,27 @@ struct EditorView: View {
                             HStack {
                                 Button(showingPreview ? "返回编辑区" : "显示预览区") {
                                     showingPreview.toggle()
+                                    if showingPreview {
+                                        viewModel.refreshRenderedPreview()
+                                    }
                                 }
                                 .buttonStyle(.bordered)
+
+                                if showingPreview {
+                                    Button("刷新最终预览（构建）") {
+                                        viewModel.refreshRenderedPreview()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                }
 
                                 Spacer()
                             }
 
                             if showingPreview {
-                                MarkdownPreviewView(
-                                    markdown: viewModel.editorPost.body,
+                                HugoRenderedPreviewView(
                                     project: viewModel.project,
-                                    postFileURL: viewModel.editorPost.fileURL
+                                    postFileURL: viewModel.editorPost.fileURL,
+                                    refreshToken: viewModel.previewRenderToken
                                 )
                                 .frame(minHeight: 540)
                                 .background(Color.black.opacity(0.03))

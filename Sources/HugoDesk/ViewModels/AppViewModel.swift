@@ -21,6 +21,7 @@ final class AppViewModel: ObservableObject {
     @Published var publishRemoteURL: String = ""
     @Published var githubToken: String = ""
     @Published var workflowName: String = "Deploy Hugo site to Pages"
+    @Published var previewRenderToken: Int = 0
     @Published var aiBaseURL: String = AIProfile.default.baseURL
     @Published var aiModel: String = AIProfile.default.model
     @Published var aiAPIKey: String = ""
@@ -257,6 +258,26 @@ final class AppViewModel: ObservableObject {
         runTask(operation: "构建站点", successStatus: "构建完成。") {
             let output = try self.publishService.runHugoBuild(project: self.project)
             return output.isEmpty ? "构建完成（无输出）。" : output
+        }
+    }
+
+    func refreshRenderedPreview() {
+        runTask(operation: "刷新最终预览", successStatus: "最终预览已刷新。") {
+            let output = try self.publishService.runHugoBuild(project: self.project)
+            self.previewRenderToken &+= 1
+            return output.isEmpty ? "构建完成（无输出）。" : output
+        }
+    }
+
+    func runHugoVersionCheck() {
+        runTask(operation: "检查 Hugo 版本", successStatus: "Hugo 版本已更新。") {
+            try self.publishService.hugoVersion(project: self.project)
+        }
+    }
+
+    func runHugoUpgrade() {
+        runTask(operation: "升级 Hugo", successStatus: "Hugo 升级流程完成。") {
+            try self.publishService.upgradeHugo(project: self.project)
         }
     }
 

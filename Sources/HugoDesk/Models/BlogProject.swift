@@ -54,4 +54,30 @@ struct BlogProject: Codable {
     var localConfigBundleURL: URL {
         rootURL.appendingPathComponent(".hugodesk.local.json", isDirectory: false)
     }
+
+    func renderedHTMLCandidates(for postFileURL: URL) -> [URL] {
+        let standardizedPost = postFileURL.standardizedFileURL.path
+        let standardizedContentRoot = contentURL.standardizedFileURL.path
+        guard standardizedPost.hasPrefix(standardizedContentRoot) else {
+            return []
+        }
+
+        var relative = String(standardizedPost.dropFirst(standardizedContentRoot.count))
+        if relative.hasPrefix("/") {
+            relative.removeFirst()
+        }
+        let noExtension = URL(fileURLWithPath: relative).deletingPathExtension().path
+        let cleaned = noExtension.hasPrefix("/") ? String(noExtension.dropFirst()) : noExtension
+        guard !cleaned.isEmpty else {
+            return []
+        }
+
+        return [
+            rootURL.appendingPathComponent("public", isDirectory: true)
+                .appendingPathComponent(cleaned, isDirectory: true)
+                .appendingPathComponent("index.html", isDirectory: false),
+            rootURL.appendingPathComponent("public", isDirectory: true)
+                .appendingPathComponent(cleaned + ".html", isDirectory: false)
+        ]
+    }
 }

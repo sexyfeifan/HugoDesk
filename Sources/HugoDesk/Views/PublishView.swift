@@ -29,17 +29,26 @@ struct PublishView: View {
 
                 ModernCard(title: "GitHub Actions 状态", subtitle: "显示最新 workflow 运行结果") {
                     VStack(alignment: .leading, spacing: 10) {
-                        TextField("仓库地址（https://github.com/owner/repo.git）", text: $viewModel.publishRemoteURL)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("Workflow 名称（可留空）", text: $viewModel.workflowName)
-                            .textFieldStyle(.roundedBorder)
-                        SecureField("GitHub Token（可选，推荐）", text: $viewModel.githubToken)
-                            .textFieldStyle(.roundedBorder)
+                        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                            GridRow {
+                                Text("仓库地址").foregroundStyle(.secondary)
+                                Text(viewModel.publishRemoteURL.isEmpty ? "未设置（请到项目页配置）" : viewModel.publishRemoteURL)
+                                    .textSelection(.enabled)
+                            }
+                            GridRow {
+                                Text("Workflow").foregroundStyle(.secondary)
+                                Text(viewModel.workflowName.isEmpty ? "未设置（请到项目页配置）" : viewModel.workflowName)
+                            }
+                            GridRow {
+                                Text("Token").foregroundStyle(.secondary)
+                                Text(viewModel.githubToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未设置（请到项目页配置）" : "已设置")
+                            }
+                        }
+                        Text("远程地址与凭据统一在“项目”页维护，发布页仅展示状态和执行操作，避免重复配置。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
 
                         HStack {
-                            Button("保存查询配置") {
-                                viewModel.saveRemoteProfile()
-                            }
                             Button("查询最新状态") {
                                 viewModel.refreshActionsStatus()
                             }

@@ -14,6 +14,38 @@ final class PublishService {
         return renderProcessLog(step: "构建 Hugo 站点", result: result)
     }
 
+    func hugoVersion(project: BlogProject) throws -> String {
+        let executable = resolveCommandPath(name: project.hugoExecutable, cwd: project.rootURL) ?? project.hugoExecutable
+        let result = try runner.run(
+            command: executable,
+            arguments: ["version"],
+            in: project.rootURL
+        )
+        return renderProcessLog(step: "检查 Hugo 版本", result: result)
+    }
+
+    func upgradeHugo(project: BlogProject) throws -> String {
+        guard let brew = resolveCommandPath(name: "brew", cwd: project.rootURL) else {
+            throw ProcessRunnerError.commandFailed(
+                command: "brew upgrade hugo",
+                code: 1,
+                output: "未检测到 Homebrew，请先安装后重试：https://brew.sh"
+            )
+        }
+
+        var logs: [String] = []
+        let update = try runner.run(command: brew, arguments: ["update"], in: project.rootURL)
+        logs.append(renderProcessLog(step: "更新 Homebrew", result: update))
+
+        let upgrade = try runner.run(command: brew, arguments: ["upgrade", "hugo"], in: project.rootURL)
+        logs.append(renderProcessLog(step: "升级 Hugo", result: upgrade))
+
+        let version = try hugoVersion(project: project)
+        logs.append(version)
+
+        return logs.joined(separator: "\n\n")
+    }
+
     func commitAndPush(
         project: BlogProject,
         message: String,
