@@ -6,10 +6,10 @@ struct PublishView: View {
     @State private var expandedLogIDs: Set<UUID> = []
     @State private var selectedPreflightCheck: PublishCheck?
     private let logRowMinWidth: CGFloat = 1080
-    private let preflightCardHeight: CGFloat = 88
+    private let preflightCardHeight: CGFloat = 64
     private let preflightColumns = [
-        GridItem(.flexible(minimum: 220), spacing: 10),
-        GridItem(.flexible(minimum: 220), spacing: 10)
+        GridItem(.flexible(minimum: 180), spacing: 8),
+        GridItem(.flexible(minimum: 180), spacing: 8)
     ]
 
     var body: some View {
@@ -51,25 +51,21 @@ struct PublishView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: iconName(for: check.level))
                                             .foregroundStyle(color(for: check.level))
-                                        VStack(alignment: .leading, spacing: 4) {
+                                        VStack(alignment: .leading, spacing: 2) {
                                             Text(check.title)
-                                                .font(.subheadline.weight(.semibold))
+                                                .font(.footnote.weight(.semibold))
                                                 .lineLimit(1)
                                             Text(statusLabel(for: check.level))
-                                                .font(.caption)
-                                                .foregroundStyle(color(for: check.level))
-                                                .lineLimit(1)
-                                            Text("点击查看详情")
                                                 .font(.caption2)
-                                                .foregroundStyle(.secondary)
+                                                .foregroundStyle(color(for: check.level))
                                                 .lineLimit(1)
                                         }
                                         Spacer(minLength: 0)
                                     }
-                                    .frame(maxWidth: .infinity, minHeight: preflightCardHeight, maxHeight: preflightCardHeight, alignment: .topLeading)
-                                    .padding(8)
+                                    .frame(maxWidth: .infinity, minHeight: preflightCardHeight, maxHeight: preflightCardHeight, alignment: .leading)
+                                    .padding(6)
                                     .background(Color.black.opacity(0.03))
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
                                 }
                                 .buttonStyle(.plain)
                             }
