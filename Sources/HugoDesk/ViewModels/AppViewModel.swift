@@ -396,7 +396,7 @@ final class AppViewModel: ObservableObject {
                     self.pagesSiteError = ""
                 } catch {
                     self.pagesSiteError = error.localizedDescription
-                    logs.append("== 检查/修复 Pages 来源 ==\n警告：\(error.localizedDescription)")
+                    logs.append("== 检查/修复 Pages 来源 ==\n警告（已跳过，不阻断发布）：\(error.localizedDescription)")
                 }
             } else {
                 logs.append("== 检查 Pages 来源 ==\n跳过：未配置远程地址或 GitHub Token。")

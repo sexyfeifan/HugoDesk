@@ -110,7 +110,7 @@ struct PublishView: View {
                                         .foregroundStyle(.green)
                                 }
                             } else if !viewModel.pagesSiteError.isEmpty {
-                                Text("Pages 来源检查失败：\(viewModel.pagesSiteError)")
+                                Text("Pages 来源检查失败（不阻断发布）：\(viewModel.pagesSiteError)")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .textSelection(.enabled)
