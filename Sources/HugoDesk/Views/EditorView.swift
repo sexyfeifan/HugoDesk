@@ -4,29 +4,17 @@ import SwiftUI
 struct EditorView: View {
     @ObservedObject var viewModel: AppViewModel
 
+    @StateObject private var vditorBridge = VditorEditorBridge()
     @State private var tagsInput = ""
     @State private var categoriesInput = ""
     @State private var keywordsInput = ""
     @State private var imageAltText = ""
     @State private var showDeleteConfirm = false
+    @State private var showingAIWritingSheet = false
+    @State private var aiWritingSourceText = ""
     @State private var editorSelection = NSRange(location: 0, length: 0)
-    @State private var showingPreview = false
-    @State private var showingPreviewSheet = false
     @State private var imageInsertMode: ImageInsertMode = .cursor
-
-    private let toolGroups: [(id: String, title: String, symbol: String, actions: [MarkdownAction])] = [
-        ("heading", "标题", "textformat.size", [.heading1, .heading2, .heading3, .heading4, .heading5, .heading6]),
-        ("style", "文本样式", "character.textbox", [.bold, .italic, .strike, .inlineCode]),
-        ("list", "列表与结构", "list.bullet.rectangle", [.bulletList, .orderedList, .taskList, .quote]),
-        ("insert", "插入", "plus.rectangle.on.rectangle", [.link, .image, .codeBlock, .table, .details, .footnote, .divider])
-    ]
-
-    private let selectionTools: [MarkdownAction] = [
-        .heading1, .heading2, .heading3, .heading4, .heading5, .heading6,
-        .bold, .italic, .strike, .inlineCode,
-        .link, .quote, .bulletList, .orderedList, .taskList, .codeBlock,
-        .table, .footnote, .divider
-    ]
+    @State private var editorImplementation: EditorImplementation = .vditor
 
     var body: some View {
         NavigationSplitView {
@@ -53,7 +41,6 @@ struct EditorView: View {
                 viewModel.loadSelectedPost()
                 viewModel.cancelLivePreviewRefresh()
                 editorSelection = NSRange(location: 0, length: 0)
-                showingPreview = false
                 refreshInputsFromPost()
             }
         } detail: {
@@ -77,7 +64,6 @@ struct EditorView: View {
                                 Button("创建文章") {
                                     viewModel.createPostFromForm()
                                     editorSelection = NSRange(location: 0, length: 0)
-                                    showingPreview = false
                                     refreshInputsFromPost()
                                 }
                             }
@@ -131,44 +117,20 @@ struct EditorView: View {
                         }
                     }
 
-                    ModernCard(title: "文本工具", subtitle: "下拉分类工具 + 选区工具 + AI 排版") {
+                    ModernCard(title: "AI 写作", subtitle: "读取素材与链接，生成可追加到正文的 Markdown") {
                         VStack(alignment: .leading, spacing: 10) {
                             HStack {
-                                ForEach(toolGroups, id: \.id) { group in
-                                    Menu {
-                                        ForEach(group.actions) { action in
-                                            Button(action.title) {
-                                                applyMarkdownAction(action)
-                                            }
-                                        }
-                                    } label: {
-                                        Label(group.title, systemImage: group.symbol)
-                                    }
-                                    .menuStyle(.borderlessButton)
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-
-                            HStack {
-                                if editorSelection.length > 0 {
-                                    Menu {
-                                        ForEach(selectionTools) { action in
-                                            Button(action.title) {
-                                                applyMarkdownAction(action)
-                                            }
-                                        }
-                                    } label: {
-                                        Label("选区工具（\(editorSelection.length) 字符）", systemImage: "selection.pin.in.out")
-                                    }
-                                    .menuStyle(.borderlessButton)
-                                    .buttonStyle(.borderedProminent)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("保留在原来的编辑区域位置，独立运行，不再隶属文本工具。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Text("支持文字、链接，或文字 + 链接混合素材。")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
                                 }
 
-                                Button(editorSelection.length > 0 ? "AI 检查并排版选区" : "AI 检查并排版全文") {
-                                    let range = editorSelection.length > 0 ? editorSelection : nil
-                                    viewModel.formatPostWithAI(selectionRange: range) { next in
-                                        editorSelection = next
-                                    }
+                                Button("打开 AI 写作") {
+                                    openAIWritingSheet()
                                 }
                                 .buttonStyle(.borderedProminent)
 
@@ -184,71 +146,61 @@ struct EditorView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-
-                            HStack {
-                                TextField("图片 alt 文本", text: $imageAltText)
-                                    .textFieldStyle(.roundedBorder)
-                                Picker("插入位置", selection: $imageInsertMode) {
-                                    ForEach(ImageInsertMode.allCases) { mode in
-                                        Text(mode.rawValue).tag(mode)
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                                .frame(width: 160)
-
-                                Button("上传并插入图片") {
-                                    if let imageURL = pickImage() {
-                                        let next = viewModel.importImageIntoPost(
-                                            from: imageURL,
-                                            altText: imageAltText,
-                                            insertionRange: targetImageInsertionRange()
-                                        )
-                                        editorSelection = next
-                                    }
-                                }
-                            }
-                            Text("图片会复制到 static/images/uploads，并在当前光标或选区位置插入 Markdown 图片语法。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
                         }
                     }
 
-                    ModernCard(title: "正文编辑", subtitle: "默认编辑区，通过按钮切换预览") {
+                    ModernCard(title: "正文编辑", subtitle: "新编辑器已内置预览与格式工具") {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Button(showingPreview ? "编辑" : "预览") {
-                                    showingPreview.toggle()
-                                    if showingPreview {
-                                        applyInputsToPost()
-                                        viewModel.scheduleLivePreviewRefresh(immediate: true)
-                                    } else {
-                                        viewModel.cancelLivePreviewRefresh()
+                                Picker("编辑器", selection: $editorImplementation) {
+                                    ForEach(EditorImplementation.allCases) { implementation in
+                                        Text(implementation.rawValue).tag(implementation)
                                     }
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(width: 240)
+
+                                TextField("图片 alt 文本", text: $imageAltText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(minWidth: 180)
+
+                                if editorImplementation == .native {
+                                    Picker("插入位置", selection: $imageInsertMode) {
+                                        ForEach(availableImageInsertModes) { mode in
+                                            Text(mode.rawValue).tag(mode)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    .frame(width: 160)
+                                }
+
+                                Button(editorImplementation == .native ? "上传并插入图片" : "选择图片并插入当前光标") {
+                                    importImageFromPanel()
                                 }
                                 .buttonStyle(.bordered)
-
-                                if showingPreview {
-                                    Button("刷新最终预览（构建）") {
-                                        applyInputsToPost()
-                                        viewModel.scheduleLivePreviewRefresh(immediate: true)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-
-                                    Button("弹窗预览") {
-                                        showingPreviewSheet = true
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
 
                                 Spacer()
                             }
 
-                            if showingPreview {
-                                HugoRenderedPreviewView(
-                                    project: viewModel.project,
-                                    postFileURL: viewModel.editorPost.fileURL,
-                                    refreshToken: viewModel.previewRenderToken,
-                                    markdownSource: viewModel.editorPost.body
+                            if editorImplementation == .vditor {
+                                Text("Vditor 已作为默认编辑器启用；如遇兼容问题，可临时切回兼容模式。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text("预览、分栏、代码主题等功能请直接使用编辑器顶部工具栏和 More 菜单。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("兼容模式不再提供旧的内嵌预览切换，仅用于保留原生文本编辑能力。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if editorImplementation == .vditor {
+                                VditorEditorView(
+                                    text: $viewModel.editorPost.body,
+                                    statusMessage: $viewModel.statusText,
+                                    bridge: vditorBridge,
+                                    onRequestImageImport: importImageFromPanel
                                 )
                                 .frame(minHeight: 540)
                                 .background(Color.black.opacity(0.03))
@@ -292,79 +244,84 @@ struct EditorView: View {
             .onAppear {
                 refreshInputsFromPost()
             }
-            .onChange(of: viewModel.editorPost.body) { _ in
-                guard showingPreview else { return }
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: viewModel.editorPost.title) { _ in
-                guard showingPreview else { return }
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: viewModel.editorPost.summary) { _ in
-                guard showingPreview else { return }
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: viewModel.editorPost.date) { _ in
-                guard showingPreview else { return }
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: viewModel.editorPost.draft) { _ in
-                guard showingPreview else { return }
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: tagsInput) { _ in
-                guard showingPreview else { return }
-                applyInputsToPost()
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: categoriesInput) { _ in
-                guard showingPreview else { return }
-                applyInputsToPost()
-                viewModel.scheduleLivePreviewRefresh()
-            }
-            .onChange(of: keywordsInput) { _ in
-                guard showingPreview else { return }
-                applyInputsToPost()
-                viewModel.scheduleLivePreviewRefresh()
-            }
             .onDisappear {
                 viewModel.cancelLivePreviewRefresh()
+            }
+            .onChange(of: editorImplementation) { _ in
+                editorSelection = NSRange(location: 0, length: 0)
+                if editorImplementation == .vditor {
+                    vditorBridge.focus()
+                }
             }
             .alert("确认删除这篇文章？", isPresented: $showDeleteConfirm) {
                 Button("删除", role: .destructive) {
                     viewModel.deleteCurrentPost()
                     viewModel.cancelLivePreviewRefresh()
                     editorSelection = NSRange(location: 0, length: 0)
-                    showingPreview = false
                     refreshInputsFromPost()
                 }
                 Button("取消", role: .cancel) {}
             } message: {
                 Text(viewModel.editorPost.fileName)
             }
-            .sheet(isPresented: $showingPreviewSheet) {
-                VStack(spacing: 10) {
+            .sheet(isPresented: $showingAIWritingSheet) {
+                VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("文章预览")
-                            .font(.headline)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("AI 写作")
+                                .font(.headline)
+                            Text("可粘贴文字、链接，或文字 + 链接混合素材。HugoDesk 会读取可访问链接，并把模型返回的 Markdown 追加到正文编辑器。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Button("关闭") {
-                            showingPreviewSheet = false
+                            if !viewModel.isAIFormatting {
+                                showingAIWritingSheet = false
+                            }
+                        }
+                        .disabled(viewModel.isAIFormatting)
+                    }
+
+                    TextEditor(text: $aiWritingSourceText)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 260)
+                        .padding(8)
+                        .background(Color.black.opacity(0.03))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+
+                    if viewModel.isAIFormatting {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ProgressView(value: viewModel.aiFormattingProgress)
+                                .progressViewStyle(.linear)
+                            Text(viewModel.aiFormattingStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.top, 8)
 
-                    HugoRenderedPreviewView(
-                        project: viewModel.project,
-                        postFileURL: viewModel.editorPost.fileURL,
-                        refreshToken: viewModel.previewRenderToken,
-                        markdownSource: viewModel.editorPost.body
-                    )
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    HStack {
+                        Button("粘贴剪贴板") {
+                            pasteAIWritingSourceFromClipboard()
+                        }
+                        .buttonStyle(.bordered)
+
+                        Spacer()
+
+                        Button("取消") {
+                            showingAIWritingSheet = false
+                        }
+                        .disabled(viewModel.isAIFormatting)
+
+                        Button("开始生成") {
+                            runAIWriting()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(aiWritingSourceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isAIFormatting)
+                    }
                 }
-                .frame(minWidth: 900, minHeight: 620)
+                .padding(16)
+                .frame(minWidth: 760, minHeight: 430)
             }
         }
     }
@@ -404,6 +361,29 @@ struct EditorView: View {
         }
     }
 
+    private func importImageFromPanel() {
+        guard let imageURL = pickImage() else { return }
+
+        if editorImplementation == .native {
+            let next = viewModel.importImageIntoPost(
+                from: imageURL,
+                altText: imageAltText,
+                insertionRange: targetImageInsertionRange()
+            )
+            editorSelection = next
+            return
+        }
+
+        do {
+            vditorBridge.rememberSelection()
+            let snippet = try viewModel.makeImportedImageMarkdown(from: imageURL, altText: imageAltText)
+            vditorBridge.insertMarkdown(snippet)
+            vditorBridge.focus()
+        } catch {
+            viewModel.statusText = error.localizedDescription
+        }
+    }
+
     private func pickImage() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
@@ -419,8 +399,50 @@ struct EditorView: View {
         viewModel.loadSelectedPost()
         viewModel.deleteCurrentPost()
         editorSelection = NSRange(location: 0, length: 0)
-        showingPreview = false
         refreshInputsFromPost()
+    }
+
+    private func openAIWritingSheet() {
+        if editorImplementation == .vditor {
+            vditorBridge.rememberSelection()
+        }
+        showingAIWritingSheet = true
+    }
+
+    private func runAIWriting() {
+        let source = aiWritingSourceText
+        viewModel.generateWritingWithAI(sourceInput: source) { generated in
+            let snippet = normalizedAIWritingSnippet(generated)
+            guard !snippet.isEmpty else { return }
+
+            if editorImplementation == .vditor {
+                vditorBridge.insertMarkdown(snippet)
+                vditorBridge.focus()
+            } else {
+                let insertionPoint = max(0, editorSelection.location + editorSelection.length)
+                let next = viewModel.insertPostSnippet(snippet, at: NSRange(location: insertionPoint, length: 0))
+                editorSelection = next
+            }
+
+            aiWritingSourceText = ""
+            showingAIWritingSheet = false
+        }
+    }
+
+    private func pasteAIWritingSourceFromClipboard() {
+        if let pasted = NSPasteboard.general.string(forType: .string), !pasted.isEmpty {
+            aiWritingSourceText = pasted
+        }
+    }
+
+    private func normalizedAIWritingSnippet(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+        return trimmed + "\n"
+    }
+
+    private var availableImageInsertModes: [ImageInsertMode] {
+        editorImplementation == .native ? ImageInsertMode.allCases : [.appendToEnd]
     }
 }
 
@@ -428,6 +450,13 @@ private enum ImageInsertMode: String, CaseIterable, Identifiable {
     case cursor = "光标位置"
     case selection = "替换选区"
     case appendToEnd = "追加到文末"
+
+    var id: String { rawValue }
+}
+
+private enum EditorImplementation: String, CaseIterable, Identifiable {
+    case vditor = "Vditor 编辑器"
+    case native = "兼容模式"
 
     var id: String { rawValue }
 }

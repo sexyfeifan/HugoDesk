@@ -10,7 +10,10 @@ let package = Package(
     ],
     targets: [
         .executableTarget(
-            name: "HugoDesk"
+            name: "HugoDesk",
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )

@@ -300,16 +300,20 @@ final class AppViewModel: ObservableObject {
     @discardableResult
     func importImageIntoPost(from sourceURL: URL, altText: String, insertionRange: NSRange?) -> NSRange {
         do {
-            let webPath = try imageAssetService.importImage(from: sourceURL, project: project, subfolder: "uploads")
-            let alt = altText.trimmingCharacters(in: .whitespacesAndNewlines)
-            let text = "![\(alt.isEmpty ? "image" : alt)](\(webPath))\n"
+            let text = try makeImportedImageMarkdown(from: sourceURL, altText: altText)
             let range = insertPostSnippet(text, at: insertionRange)
-            statusText = "图片已导入：\(webPath)"
             return range
         } catch {
             statusText = error.localizedDescription
             return insertionRange ?? NSRange(location: (editorPost.body as NSString).length, length: 0)
         }
+    }
+
+    func makeImportedImageMarkdown(from sourceURL: URL, altText: String) throws -> String {
+        let webPath = try imageAssetService.importImage(from: sourceURL, project: project, subfolder: "uploads")
+        let resolvedAlt = resolvedImageAltText(altText, fallbackURL: sourceURL)
+        statusText = "图片已导入：\(webPath)"
+        return "![\(resolvedAlt)](\(webPath))\n"
     }
 
     func importThemeImage(from sourceURL: URL, field: ThemeImageField) {
@@ -338,6 +342,19 @@ final class AppViewModel: ObservableObject {
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    private func resolvedImageAltText(_ altText: String, fallbackURL: URL) -> String {
+        let trimmed = altText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+
+        let fallback = fallbackURL.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "[-_]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return fallback.isEmpty ? "image" : fallback
     }
 
     func saveThemeConfig() {
@@ -640,7 +657,7 @@ final class AppViewModel: ObservableObject {
         }
 
         isBusy = true
-        startAIFormattingProgress()
+        startAITaskProgress(.formatting)
         Task {
             defer { isBusy = false }
             do {
@@ -659,45 +676,74 @@ final class AppViewModel: ObservableObject {
                 let nextRange = NSRange(location: targetRange.location + (formatted as NSString).length, length: 0)
                 onComplete(nextRange)
                 self.statusText = "AI Markdown 排版完成。"
-                self.finishAIFormattingProgress(success: true)
+                self.finishAITaskProgress(.formatting, success: true)
             } catch {
                 self.statusText = error.localizedDescription
-                self.finishAIFormattingProgress(success: false)
+                self.finishAITaskProgress(.formatting, success: false)
             }
         }
     }
 
-    private func startAIFormattingProgress() {
+    func generateWritingWithAI(sourceInput: String, onComplete: @escaping (String) -> Void) {
+        guard !isAIFormatting else {
+            statusText = "AI 写作仍在进行中，请稍候。"
+            return
+        }
+
+        let source = sourceInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else {
+            statusText = "请输入写作素材或链接。"
+            return
+        }
+
+        isBusy = true
+        startAITaskProgress(.writing)
+        Task {
+            defer { isBusy = false }
+            do {
+                let profile = AIProfile(
+                    baseURL: self.aiBaseURL.trimmingCharacters(in: .whitespacesAndNewlines),
+                    model: self.aiModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                let generated = try await self.aiService.writeMarkdown(
+                    input: source,
+                    profile: profile,
+                    apiKey: self.aiAPIKey
+                )
+                onComplete(generated)
+                self.statusText = "AI 写作完成，结果已追加到正文。"
+                self.finishAITaskProgress(.writing, success: true)
+            } catch {
+                self.statusText = error.localizedDescription
+                self.finishAITaskProgress(.writing, success: false)
+            }
+        }
+    }
+
+    private func startAITaskProgress(_ task: AITaskKind) {
         isAIFormatting = true
         aiFormattingProgress = 0.05
-        aiFormattingStatus = "准备检查 Markdown 结构..."
+        aiFormattingStatus = task.initialStatus
 
         aiFormattingProgressTask?.cancel()
         aiFormattingProgressTask = Task { [weak self] in
-            let stages: [(UInt64, Double, String)] = [
-                (300_000_000, 0.18, "检查标题、列表与代码块边界..."),
-                (600_000_000, 0.36, "校验 Markdown 符号闭合正确性..."),
-                (900_000_000, 0.58, "清理无意义字符与重复标点..."),
-                (1_200_000_000, 0.78, "优化段落与语义结构..."),
-                (1_500_000_000, 0.90, "等待 AI 返回修正结果...")
-            ]
-            for stage in stages {
-                try? await Task.sleep(nanoseconds: stage.0)
+            for stage in task.stages {
+                try? await Task.sleep(nanoseconds: stage.delay)
                 guard let self, !Task.isCancelled else { return }
-                if self.isAIFormatting, self.aiFormattingProgress < stage.1 {
-                    self.aiFormattingProgress = stage.1
-                    self.aiFormattingStatus = stage.2
+                if self.isAIFormatting, self.aiFormattingProgress < stage.progress {
+                    self.aiFormattingProgress = stage.progress
+                    self.aiFormattingStatus = stage.message
                 }
             }
         }
     }
 
-    private func finishAIFormattingProgress(success: Bool) {
+    private func finishAITaskProgress(_ task: AITaskKind, success: Bool) {
         aiFormattingProgressTask?.cancel()
         aiFormattingProgressTask = nil
 
         aiFormattingProgress = success ? 1.0 : max(aiFormattingProgress, 0.1)
-        aiFormattingStatus = success ? "AI 排版完成。" : "AI 排版失败。"
+        aiFormattingStatus = success ? task.successStatus : task.failureStatus
 
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_200_000_000)
@@ -705,6 +751,59 @@ final class AppViewModel: ObservableObject {
             self.isAIFormatting = false
             self.aiFormattingProgress = 0
             self.aiFormattingStatus = ""
+        }
+    }
+
+    private enum AITaskKind {
+        case formatting
+        case writing
+
+        var initialStatus: String {
+            switch self {
+            case .formatting:
+                return "准备检查 Markdown 结构..."
+            case .writing:
+                return "准备读取素材内容..."
+            }
+        }
+
+        var successStatus: String {
+            switch self {
+            case .formatting:
+                return "AI 排版完成。"
+            case .writing:
+                return "AI 写作完成。"
+            }
+        }
+
+        var failureStatus: String {
+            switch self {
+            case .formatting:
+                return "AI 排版失败。"
+            case .writing:
+                return "AI 写作失败。"
+            }
+        }
+
+        var stages: [(delay: UInt64, progress: Double, message: String)] {
+            switch self {
+            case .formatting:
+                return [
+                    (300_000_000, 0.18, "检查标题、列表与代码块边界..."),
+                    (600_000_000, 0.36, "校验 Markdown 符号闭合正确性..."),
+                    (900_000_000, 0.58, "清理无意义字符与重复标点..."),
+                    (1_200_000_000, 0.78, "优化段落与语义结构..."),
+                    (1_500_000_000, 0.90, "等待 AI 返回修正结果...")
+                ]
+            case .writing:
+                return [
+                    (250_000_000, 0.16, "识别素材中的文字与链接..."),
+                    (600_000_000, 0.34, "读取链接内容与上下文..."),
+                    (950_000_000, 0.56, "整理可用事实与结构重点..."),
+                    (1_250_000_000, 0.76, "调用预设大模型生成 Markdown 草稿..."),
+                    (1_600_000_000, 0.90, "等待 AI 返回写作结果...")
+                ]
+            }
         }
     }
 
