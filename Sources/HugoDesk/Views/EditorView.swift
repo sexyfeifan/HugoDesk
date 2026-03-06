@@ -5,6 +5,7 @@ struct EditorView: View {
     @ObservedObject var viewModel: AppViewModel
 
     @StateObject private var vditorBridge = VditorEditorBridge()
+    @SceneStorage("editor.columnVisibility") private var columnVisibilityRawValue = NavigationSplitViewVisibility.all.storageKey
     @State private var tagsInput = ""
     @State private var categoriesInput = ""
     @State private var keywordsInput = ""
@@ -17,7 +18,7 @@ struct EditorView: View {
     @State private var editorImplementation: EditorImplementation = .vditor
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: editorColumnVisibility) {
             List(selection: $viewModel.selectedPostID) {
                 ForEach(viewModel.posts) { post in
                     VStack(alignment: .leading, spacing: 4) {
@@ -444,6 +445,13 @@ struct EditorView: View {
     private var availableImageInsertModes: [ImageInsertMode] {
         editorImplementation == .native ? ImageInsertMode.allCases : [.appendToEnd]
     }
+
+    private var editorColumnVisibility: Binding<NavigationSplitViewVisibility> {
+        Binding(
+            get: { NavigationSplitViewVisibility(storedValue: columnVisibilityRawValue) },
+            set: { columnVisibilityRawValue = $0.storageKey }
+        )
+    }
 }
 
 private enum ImageInsertMode: String, CaseIterable, Identifiable {
@@ -459,4 +467,35 @@ private enum EditorImplementation: String, CaseIterable, Identifiable {
     case native = "兼容模式"
 
     var id: String { rawValue }
+}
+
+private extension NavigationSplitViewVisibility {
+    init(storedValue: String) {
+        switch storedValue {
+        case Self.automatic.storageKey:
+            self = .automatic
+        case Self.doubleColumn.storageKey:
+            self = .doubleColumn
+        case Self.detailOnly.storageKey:
+            self = .detailOnly
+        default:
+            self = .all
+        }
+    }
+
+    var storageKey: String {
+        if self == .automatic {
+            return "automatic"
+        }
+        if self == .all {
+            return "all"
+        }
+        if self == .doubleColumn {
+            return "doubleColumn"
+        }
+        if self == .detailOnly {
+            return "detailOnly"
+        }
+        return "all"
+    }
 }
