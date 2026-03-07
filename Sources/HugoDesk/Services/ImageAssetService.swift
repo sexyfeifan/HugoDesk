@@ -18,6 +18,83 @@ final class ImageAssetService {
         return "/images/\(subfolder)/\(targetURL.lastPathComponent)"
     }
 
+    func importPageResource(from sourceURL: URL, for post: BlogPost, preferredSubfolder: String = "images") throws -> String {
+        guard let bundleRoot = post.bundleRootURL else {
+            throw NSError(domain: "HugoDesk", code: 1, userInfo: [NSLocalizedDescriptionKey: "当前页面不是 bundle，不能导入页面资源。"])
+        }
+
+        let targetDir = bundleRoot.appendingPathComponent(preferredSubfolder, isDirectory: true)
+        try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+
+        let ext = sourceURL.pathExtension.isEmpty ? "png" : sourceURL.pathExtension.lowercased()
+        let base = sourceURL.deletingPathExtension().lastPathComponent
+        let slug = slugify(base)
+        let stamp = timestamp()
+        let fileName = "\(stamp)-\(slug).\(ext)"
+        let targetURL = uniqueFileURL(in: targetDir, preferredName: fileName)
+        try fm.copyItem(at: sourceURL, to: targetURL)
+
+        let relative = targetURL.path.replacingOccurrences(of: bundleRoot.path + "/", with: "")
+        return relative
+    }
+
+    func listPageResources(for post: BlogPost) -> [PageResourceItem] {
+        guard let bundleRoot = post.bundleRootURL else { return [] }
+        let enumerator = fm.enumerator(at: bundleRoot, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles])
+        var resources: [PageResourceItem] = []
+        while let item = enumerator?.nextObject() as? URL {
+            guard item.path != post.fileURL.path else { continue }
+            let values = try? item.resourceValues(forKeys: [.isRegularFileKey])
+            guard values?.isRegularFile == true else { continue }
+            let relativePath = item.path.replacingOccurrences(of: bundleRoot.path + "/", with: "")
+            resources.append(PageResourceItem(url: item, relativePath: relativePath, mediaKind: mediaKind(for: item)))
+        }
+        return resources.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
+    }
+
+    func movePageResource(_ item: PageResourceItem, to relativePath: String, for post: BlogPost) throws -> PageResourceItem {
+        guard let bundleRoot = post.bundleRootURL else {
+            throw NSError(domain: "HugoDesk", code: 2, userInfo: [NSLocalizedDescriptionKey: "当前页面不是 bundle，不能移动页面资源。"])
+        }
+
+        let cleaned = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !cleaned.isEmpty else {
+            throw NSError(domain: "HugoDesk", code: 3, userInfo: [NSLocalizedDescriptionKey: "目标资源路径不能为空。"])
+        }
+
+        let targetURL = bundleRoot.appendingPathComponent(cleaned)
+        guard targetURL.standardizedFileURL.path != post.fileURL.standardizedFileURL.path else {
+            throw NSError(domain: "HugoDesk", code: 4, userInfo: [NSLocalizedDescriptionKey: "不能覆盖当前正文文件。"])
+        }
+
+        try fm.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if fm.fileExists(atPath: targetURL.path) {
+            throw NSError(domain: "HugoDesk", code: 5, userInfo: [NSLocalizedDescriptionKey: "目标路径已存在同名文件：\(cleaned)"])
+        }
+
+        try fm.moveItem(at: item.url, to: targetURL)
+        return PageResourceItem(url: targetURL, relativePath: cleaned, mediaKind: mediaKind(for: targetURL))
+    }
+
+    func deletePageResource(_ item: PageResourceItem, for post: BlogPost) throws {
+        guard post.usesPageBundle else {
+            throw NSError(domain: "HugoDesk", code: 6, userInfo: [NSLocalizedDescriptionKey: "当前页面不是 bundle，不能删除页面资源。"])
+        }
+        guard fm.fileExists(atPath: item.url.path) else { return }
+        try fm.removeItem(at: item.url)
+    }
+
+    func markdownSnippet(for item: PageResourceItem) -> String {
+        let escapedTitle = item.url.deletingPathExtension().lastPathComponent
+        switch item.mediaKind {
+        case "图片":
+            return "![\(escapedTitle)](\(item.relativePath))\n"
+        default:
+            return "[\(item.relativePath)](\(item.relativePath))\n"
+        }
+    }
+
     func normalizePostImageLinks(project: BlogProject) throws -> (changedFiles: Int, changedLinks: Int) {
         var changedFiles = 0
         var changedLinks = 0
@@ -121,5 +198,20 @@ final class ImageAssetService {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         return f.string(from: Date())
+    }
+
+    private func mediaKind(for url: URL) -> String {
+        switch url.pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "webp", "avif", "svg", "heic":
+            return "图片"
+        case "pdf":
+            return "PDF"
+        case "mp3", "wav", "m4a":
+            return "音频"
+        case "mp4", "mov", "webm":
+            return "视频"
+        default:
+            return url.pathExtension.isEmpty ? "文件" : url.pathExtension.uppercased()
+        }
     }
 }

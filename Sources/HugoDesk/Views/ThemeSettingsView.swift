@@ -6,6 +6,8 @@ struct ThemeSettingsView: View {
     @State private var customCSSInput = ""
     @State private var customJSInput = ""
     @State private var outputsInput = ""
+    @State private var taxonomyEntries: [TaxonomyDraft] = []
+    @State private var languageEntries: [LanguageDraft] = []
 
     var body: some View {
         ScrollView {
@@ -71,6 +73,10 @@ struct ThemeSettingsView: View {
                                 }
                             }
                         }
+                        SettingRow(key: "sectionPagesMenu", title: "sectionPagesMenu", helpText: "让 Hugo 自动把 section 页面加入指定菜单，例如 main 或 docs。", scope: "导航") {
+                            TextField("例如：main", text: $viewModel.config.sectionPagesMenu)
+                                .textFieldStyle(.roundedBorder)
+                        }
                         SettingRow(key: "pygmentsCodeFences", title: "代码块高亮", helpText: "开启 fenced code block 语法高亮。", scope: "渲染") {
                             Toggle("", isOn: $viewModel.config.pygmentsCodeFences)
                                 .labelsHidden()
@@ -78,6 +84,100 @@ struct ThemeSettingsView: View {
                         SettingRow(key: "pygmentsUseClasses", title: "高亮样式类", helpText: "使用 CSS class 形式输出高亮样式。", scope: "渲染") {
                             Toggle("", isOn: $viewModel.config.pygmentsUseClasses)
                                 .labelsHidden()
+                        }
+                    }
+                }
+
+                ModernCard(title: "内容结构配置", subtitle: "这里管理 Hugo 的 taxonomies 和多语言 contentDir。它们直接决定写作页的分类法字段和工作区切换能力。") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("分类法 taxonomies")
+                                    .font(.headline)
+                                Spacer()
+                                Button("恢复默认") {
+                                    taxonomyEntries = [
+                                        TaxonomyDraft(key: "tag", value: "tags"),
+                                        TaxonomyDraft(key: "category", value: "categories")
+                                    ]
+                                }
+                                Button("新增分类法") {
+                                    taxonomyEntries.append(TaxonomyDraft())
+                                }
+                            }
+
+                            Text("左边是单数键名，右边是内容里实际使用的复数名称。比如 `tag -> tags`、`series -> series`。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if taxonomyEntries.isEmpty {
+                                Text("当前没有自定义 taxonomy。你可以恢复默认，也可以手动新增。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(Array(taxonomyEntries.enumerated()), id: \.element.id) { index, _ in
+                                    HStack(spacing: 10) {
+                                        TextField("单数键名，例如 tag", text: bindingForTaxonomy(index, \.key))
+                                            .textFieldStyle(.roundedBorder)
+                                        TextField("复数名称，例如 tags", text: bindingForTaxonomy(index, \.value))
+                                            .textFieldStyle(.roundedBorder)
+                                        Button("删除") {
+                                            taxonomyEntries.remove(at: index)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("多语言内容目录")
+                                    .font(.headline)
+                                Spacer()
+                                Button("新增语言") {
+                                    languageEntries.append(LanguageDraft())
+                                }
+                            }
+
+                            Text("这里对应 `languages.<code>.contentDir`。写作页顶部的“内容工作区”就是基于这里生成的。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if languageEntries.isEmpty {
+                                Text("当前没有配置多语言工作区。保留为空时，软件会默认使用主 `content` 目录。")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(Array(languageEntries.enumerated()), id: \.element.id) { index, _ in
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        HStack {
+                                            Text("语言 \(index + 1)")
+                                                .font(.subheadline.weight(.semibold))
+                                            Spacer()
+                                            Button("删除") {
+                                                languageEntries.remove(at: index)
+                                            }
+                                        }
+                                        HStack(spacing: 10) {
+                                            TextField("语言代码，例如 zh-cn / en", text: bindingForLanguage(index, \.code))
+                                                .textFieldStyle(.roundedBorder)
+                                            TextField("显示名，例如 简体中文 / English", text: bindingForLanguage(index, \.title))
+                                                .textFieldStyle(.roundedBorder)
+                                        }
+                                        HStack(spacing: 10) {
+                                            TextField("内容目录，例如 content / content.en", text: bindingForLanguage(index, \.contentDir))
+                                                .textFieldStyle(.roundedBorder)
+                                            Stepper("权重 \(languageEntries[index].weight)", value: bindingForLanguageWeight(index), in: 0...100)
+                                                .frame(width: 160, alignment: .leading)
+                                        }
+                                    }
+                                    .padding(10)
+                                    .background(Color.black.opacity(0.03))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                }
+                            }
                         }
                     }
                 }
@@ -398,6 +498,17 @@ struct ThemeSettingsView: View {
         customCSSInput = viewModel.config.params.customCSS.joined(separator: "\n")
         customJSInput = viewModel.config.params.customJS.joined(separator: "\n")
         outputsInput = viewModel.config.outputsHome.joined(separator: ", ")
+        taxonomyEntries = viewModel.config.taxonomies
+            .sorted { $0.key < $1.key }
+            .map { TaxonomyDraft(key: $0.key, value: $0.value) }
+        languageEntries = viewModel.config.languageProfiles
+            .sorted {
+                if $0.weight == $1.weight {
+                    return $0.code < $1.code
+                }
+                return $0.weight < $1.weight
+            }
+            .map { LanguageDraft(code: $0.code, title: $0.title, contentDir: $0.contentDir, weight: $0.weight) }
     }
 
     private func applyTextInputs() {
@@ -407,12 +518,70 @@ struct ThemeSettingsView: View {
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+
+        var taxonomies: [String: String] = [:]
+        for entry in taxonomyEntries {
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = entry.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !value.isEmpty else { continue }
+            taxonomies[key] = value
+        }
+        viewModel.config.taxonomies = taxonomies
+
+        viewModel.config.languageProfiles = languageEntries.compactMap { entry in
+            let code = entry.code.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = entry.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let contentDir = entry.contentDir.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !code.isEmpty, !contentDir.isEmpty else { return nil }
+            return HugoLanguageProfile(
+                code: code,
+                title: title.isEmpty ? code : title,
+                contentDir: contentDir,
+                weight: entry.weight
+            )
+        }
+        .sorted {
+            if $0.weight == $1.weight {
+                return $0.code < $1.code
+            }
+            return $0.weight < $1.weight
+        }
     }
 
     private func splitLines(_ input: String) -> [String] {
         input.components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func bindingForTaxonomy(_ index: Int, _ keyPath: WritableKeyPath<TaxonomyDraft, String>) -> Binding<String> {
+        Binding {
+            guard taxonomyEntries.indices.contains(index) else { return "" }
+            return taxonomyEntries[index][keyPath: keyPath]
+        } set: { newValue in
+            guard taxonomyEntries.indices.contains(index) else { return }
+            taxonomyEntries[index][keyPath: keyPath] = newValue
+        }
+    }
+
+    private func bindingForLanguage(_ index: Int, _ keyPath: WritableKeyPath<LanguageDraft, String>) -> Binding<String> {
+        Binding {
+            guard languageEntries.indices.contains(index) else { return "" }
+            return languageEntries[index][keyPath: keyPath]
+        } set: { newValue in
+            guard languageEntries.indices.contains(index) else { return }
+            languageEntries[index][keyPath: keyPath] = newValue
+        }
+    }
+
+    private func bindingForLanguageWeight(_ index: Int) -> Binding<Int> {
+        Binding {
+            guard languageEntries.indices.contains(index) else { return 0 }
+            return languageEntries[index].weight
+        } set: { newValue in
+            guard languageEntries.indices.contains(index) else { return }
+            languageEntries[index].weight = newValue
+        }
     }
 
     private func pickImage() -> URL? {
@@ -424,4 +593,18 @@ struct ThemeSettingsView: View {
         panel.prompt = "选择"
         return panel.runModal() == .OK ? panel.url : nil
     }
+}
+
+private struct TaxonomyDraft: Identifiable {
+    var id = UUID()
+    var key: String = ""
+    var value: String = ""
+}
+
+private struct LanguageDraft: Identifiable {
+    var id = UUID()
+    var code: String = ""
+    var title: String = ""
+    var contentDir: String = ""
+    var weight: Int = 0
 }

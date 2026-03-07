@@ -93,8 +93,25 @@ struct BlogProject: Codable {
         rootURL.appendingPathComponent("static/images", isDirectory: true)
     }
 
+    var archetypesURL: URL {
+        rootURL.appendingPathComponent("archetypes", isDirectory: true)
+    }
+
     var localConfigBundleURL: URL {
         rootURL.appendingPathComponent(".hugodesk.local.json", isDirectory: false)
+    }
+
+    func contentURL(forSectionPath sectionPath: String) -> URL {
+        let trimmed = sectionPath.trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard !trimmed.isEmpty else { return contentURL }
+        return contentURL.appendingPathComponent(trimmed, isDirectory: true)
+    }
+
+    func withContentSubpath(_ subpath: String) -> BlogProject {
+        var copy = self
+        copy.contentSubpath = subpath
+        return copy
     }
 
     func renderedHTMLCandidates(for postFileURL: URL) -> [URL] {

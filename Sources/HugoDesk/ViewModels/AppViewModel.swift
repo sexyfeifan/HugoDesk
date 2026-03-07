@@ -16,6 +16,19 @@ final class AppViewModel: ObservableObject {
     @Published var editorMode: EditorMode = .markdown
     @Published var newPostTitle: String = ""
     @Published var newPostFileName: String = "new-post.md"
+    @Published var newPostSectionPath: String = ""
+    @Published var newPostCreationMode: ContentCreationMode = .singleFile
+    @Published var newPostFrontMatterFormat: FrontMatterFormat = .toml
+    @Published var newPostArchetypeKind: String = ""
+    @Published var availableArchetypes: [String] = []
+    @Published var frontMatterEditorMode: FrontMatterEditorMode = .structured
+    @Published var imageStorageMode: ImageStorageMode = .automatic
+    @Published var languageWorkspaces: [HugoLanguageProfile] = []
+    @Published var selectedWorkspaceCode: String = ""
+    @Published var availableShortcodes: [ShortcodeDefinition] = []
+    @Published var translationDiagnostics: [TranslationDiagnostic] = []
+    @Published var allWorkspaceReferenceDiagnostics: [ReferenceDiagnostic] = []
+    @Published var menuTreeEntries: [MenuTreeEntry] = []
 
     @Published var publishLog: String = ""
     @Published var publishLogEntries: [PublishLogEntry] = []
@@ -51,6 +64,7 @@ final class AppViewModel: ObservableObject {
     private let pagesService = GitHubPagesService()
     private let credentialStore = CredentialStore()
     private let aiService = AIService()
+    private let contentWorkspaceService = ContentWorkspaceService()
     private var livePreviewTask: Task<Void, Never>?
     private var preflightMonitorTask: Task<Void, Never>?
     private var actionsStatusMonitorTask: Task<Void, Never>?
@@ -123,6 +137,42 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    var dynamicTaxonomyKeys: [String] {
+        let builtins = Set(["tags", "categories"])
+        return config.taxonomies.values
+            .filter { !builtins.contains($0) }
+            .sorted()
+    }
+
+    var summaryMode: SummaryHandlingMode {
+        postService.summaryMode(for: editorPost)
+    }
+
+    var pageReferenceCandidates: [PageReferenceCandidate] {
+        contentWorkspaceService.referenceCandidates(posts: posts, project: project)
+    }
+
+    var unresolvedReferenceDiagnostics: [ReferenceDiagnostic] {
+        contentWorkspaceService.unresolvedReferences(posts: posts, project: project)
+    }
+
+    var translationTargets: [HugoLanguageProfile] {
+        let currentDir = project.contentSubpath
+        return languageWorkspaces.filter { $0.contentDir != currentDir }
+    }
+
+    var newPostPreview: BlogPost {
+        let title = newPostTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "未命名文章" : newPostTitle
+        return postService.previewNewPost(
+            title: title,
+            fileName: newPostFileName,
+            in: project,
+            sectionPath: newPostSectionPath,
+            creationMode: newPostCreationMode,
+            frontMatterFormat: newPostFrontMatterFormat
+        )
+    }
+
     private var preferredGitHubToken: String {
         let classic = githubClassicToken.trimmingCharacters(in: .whitespacesAndNewlines)
         if !classic.isEmpty {
@@ -148,13 +198,11 @@ final class AppViewModel: ObservableObject {
             let localBundleLoaded = loadLocalConfigBundleIfPresent()
             normalizeContentSubpathIfNeeded(localBundleLoaded: localBundleLoaded)
             refreshDetectedThemes()
-            posts = try postService.loadPosts(for: project)
-            if let first = posts.first {
-                selectedPostID = first.id
-                editorPost = first
-            } else {
-                editorPost = BlogPost.empty(in: project.contentURL)
-            }
+            refreshLanguageWorkspaces()
+            refreshShortcodes()
+            availableArchetypes = postService.availableArchetypes(for: project)
+            try reloadPosts(selectFirstIfNeeded: true)
+            refreshContentDiagnostics()
             persistProjectRootPath(project.rootPath)
             statusText = localBundleLoaded ? "项目已加载（已读取本地配置包）。" : "项目已加载。"
         } catch {
@@ -219,19 +267,47 @@ final class AppViewModel: ObservableObject {
         guard let file = posts.first(where: { $0.id == selectedPostID })?.fileURL else { return }
         do {
             editorPost = try postService.loadPost(at: file)
+            frontMatterEditorMode = .structured
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func switchContentWorkspace(to code: String) {
+        guard let workspace = languageWorkspaces.first(where: { $0.code == code }) else { return }
+        project.contentSubpath = workspace.contentDir
+        selectedWorkspaceCode = workspace.code
+        do {
+            try reloadPosts(selectFirstIfNeeded: true)
+            refreshContentDiagnostics()
+            statusText = "已切换到内容工作区：\(workspace.title)"
         } catch {
             statusText = error.localizedDescription
         }
     }
 
     func createNewPost() {
-        editorPost = postService.createNewPost(title: "未命名文章", fileName: nil, in: project)
+        editorPost = postService.createNewPost(
+            title: "未命名文章",
+            fileName: nil,
+            in: project,
+            sectionPath: "",
+            creationMode: .singleFile,
+            frontMatterFormat: .toml,
+            archetypeKind: nil
+        )
         selectedPostID = nil
         statusText = "已创建新草稿。"
     }
 
     func updateSuggestedFileName() {
-        newPostFileName = postService.suggestFileName(from: newPostTitle)
+        let suggested = postService.suggestFileName(from: newPostTitle)
+        switch newPostCreationMode {
+        case .singleFile:
+            newPostFileName = suggested
+        case .leafBundle, .branchBundle:
+            newPostFileName = URL(fileURLWithPath: suggested).deletingPathExtension().lastPathComponent
+        }
     }
 
     func updateTitleFromFileName() {
@@ -247,23 +323,26 @@ final class AppViewModel: ObservableObject {
     func createPostFromForm() {
         let title = newPostTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalTitle = title.isEmpty ? "未命名文章" : title
-        editorPost = postService.createNewPost(title: finalTitle, fileName: newPostFileName, in: project)
-        editorPost.body = ""
+        editorPost = postService.createNewPost(
+            title: finalTitle,
+            fileName: newPostFileName,
+            in: project,
+            sectionPath: newPostSectionPath,
+            creationMode: newPostCreationMode,
+            frontMatterFormat: newPostFrontMatterFormat,
+            archetypeKind: newPostArchetypeKind.isEmpty ? nil : newPostArchetypeKind
+        )
+        editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+        frontMatterEditorMode = .structured
         selectedPostID = nil
-        statusText = "已创建新文章：\(editorPost.fileName)"
+        statusText = "已创建新内容：\(editorPost.displayFileName)"
     }
 
     func deleteCurrentPost() {
         do {
             try postService.deletePost(at: editorPost.fileURL)
-            posts = try postService.loadPosts(for: project)
-            if let first = posts.first {
-                selectedPostID = first.id
-                editorPost = first
-            } else {
-                selectedPostID = nil
-                editorPost = BlogPost.empty(in: project.contentURL)
-            }
+            try reloadPosts(selectFirstIfNeeded: true)
+            refreshContentDiagnostics()
             statusText = "文章已删除。"
         } catch {
             statusText = error.localizedDescription
@@ -309,8 +388,108 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    func importCurrentPageResource(from sourceURL: URL) {
+        do {
+            let relativePath = try imageAssetService.importPageResource(from: sourceURL, for: editorPost)
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+            statusText = "页面资源已导入：\(relativePath)"
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func moveCurrentPageResource(_ item: PageResourceItem, to relativePath: String) {
+        do {
+            let moved = try imageAssetService.movePageResource(item, to: relativePath, for: editorPost)
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+            statusText = "页面资源已移动：\(moved.relativePath)"
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func deleteCurrentPageResource(_ item: PageResourceItem) {
+        do {
+            try imageAssetService.deletePageResource(item, for: editorPost)
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+            statusText = "页面资源已删除：\(item.relativePath)"
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
+    func pageResourceSnippet(for item: PageResourceItem) -> String {
+        imageAssetService.markdownSnippet(for: item)
+    }
+
+    func refreshCurrentPageResources() {
+        editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+    }
+
+    func syncRawFrontMatterFromStructured() {
+        editorPost.rawFrontMatter = postService.renderFrontMatter(for: editorPost)
+    }
+
+    func syncStructuredFieldsFromRaw() {
+        postService.applyRawFrontMatter(editorPost.rawFrontMatter, format: editorPost.frontMatterFormat, to: &editorPost)
+        editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+    }
+
+    func insertSummaryDivider() {
+        editorPost.body = postService.ensureSummaryDivider(in: editorPost.body)
+        statusText = "已插入 <!--more--> 摘要分隔标记。"
+    }
+
+    func insertReferenceSnippet(target: PageReferenceCandidate, useRelref: Bool, anchor: String) -> String {
+        let cleanedAnchor = anchor.trimmingCharacters(in: .whitespacesAndNewlines)
+        let path = cleanedAnchor.isEmpty ? target.referencePath : "\(target.referencePath)#\(cleanedAnchor)"
+        let kind = useRelref ? "relref" : "ref"
+        return "{{< \(kind) \"\(path)\" >}}"
+    }
+
+    func makeShortcodeSnippet(name: String, parameters: String, isBlock: Bool) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedParameters = parameters.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else { return "" }
+        let suffix = trimmedParameters.isEmpty ? "" : " \(trimmedParameters)"
+        if isBlock {
+            return "{{< \(trimmedName)\(suffix) >}}\n\n{{< /\(trimmedName) >}}"
+        }
+        return "{{< \(trimmedName)\(suffix) >}}"
+    }
+
+    func createTranslation(in workspace: HugoLanguageProfile) {
+        do {
+            let targetContentURL = project.rootURL.appendingPathComponent(workspace.contentDir, isDirectory: true)
+            let relative = relativePathForCurrentPost()
+            let targetURL = targetContentURL.appendingPathComponent(relative, isDirectory: false)
+            var translated = editorPost
+            translated.fileURL = targetURL
+            translated.bundleRootURL = translated.usesPageBundle ? targetURL.deletingLastPathComponent() : nil
+            translated.pageResources = []
+            translated.translationKey = translated.translationKey.isEmpty ? stableTranslationKey(for: editorPost) : translated.translationKey
+            try postService.savePost(translated, preferRawFrontMatter: false)
+            refreshLanguageWorkspaces()
+            try reloadPosts(selectFirstIfNeeded: false)
+            refreshContentDiagnostics()
+            statusText = "已创建翻译副本：\(workspace.title)"
+        } catch {
+            statusText = error.localizedDescription
+        }
+    }
+
     func makeImportedImageMarkdown(from sourceURL: URL, altText: String) throws -> String {
-        let webPath = try imageAssetService.importImage(from: sourceURL, project: project, subfolder: "uploads")
+        let targetMode = resolvedImageStorageMode(for: editorPost)
+        let webPath: String
+        switch targetMode {
+        case .pageBundle:
+            webPath = try imageAssetService.importPageResource(from: sourceURL, for: editorPost)
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+        case .staticUploads:
+            webPath = try imageAssetService.importImage(from: sourceURL, project: project, subfolder: "uploads")
+        case .automatic:
+            webPath = try imageAssetService.importImage(from: sourceURL, project: project, subfolder: "uploads")
+        }
         let resolvedAlt = resolvedImageAltText(altText, fallbackURL: sourceURL)
         statusText = "图片已导入：\(webPath)"
         return "![\(resolvedAlt)](\(webPath))\n"
@@ -335,9 +514,16 @@ final class AppViewModel: ObservableObject {
 
     func saveCurrentPost() {
         do {
-            try postService.savePost(editorPost)
-            posts = try postService.loadPosts(for: project)
+            if frontMatterEditorMode == .raw {
+                postService.applyRawFrontMatter(editorPost.rawFrontMatter, format: editorPost.frontMatterFormat, to: &editorPost)
+            } else {
+                editorPost.rawFrontMatter = postService.renderFrontMatter(for: editorPost)
+            }
+            try postService.savePost(editorPost, preferRawFrontMatter: frontMatterEditorMode == .raw)
+            try reloadPosts(selectFirstIfNeeded: false)
             selectedPostID = editorPost.id
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+            refreshContentDiagnostics()
             statusText = "文章已保存。"
         } catch {
             statusText = error.localizedDescription
@@ -357,15 +543,48 @@ final class AppViewModel: ObservableObject {
         return fallback.isEmpty ? "image" : fallback
     }
 
+    private func resolvedImageStorageMode(for post: BlogPost) -> ImageStorageMode {
+        switch imageStorageMode {
+        case .automatic:
+            return post.usesPageBundle ? .pageBundle : .staticUploads
+        case .pageBundle:
+            return post.usesPageBundle ? .pageBundle : .staticUploads
+        case .staticUploads:
+            return .staticUploads
+        }
+    }
+
     func saveThemeConfig() {
         do {
             try configService.saveConfig(config, for: project)
             try saveLocalConfigBundle()
             refreshDetectedThemes()
+            refreshLanguageWorkspaces()
+            refreshShortcodes()
+            refreshContentDiagnostics()
             statusText = "hugo.toml 已保存，并同步到项目配置包。"
         } catch {
             statusText = error.localizedDescription
         }
+    }
+
+    func referenceAnchors(for candidate: PageReferenceCandidate?) -> [String] {
+        guard let candidate,
+              let post = posts.first(where: { $0.fileURL.path == candidate.filePath }) else {
+            return []
+        }
+        return contentWorkspaceService.anchors(for: post)
+    }
+
+    func missingTranslationWorkspaces(for post: BlogPost) -> [HugoLanguageProfile] {
+        let key = post.translationKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let diagnostic = translationDiagnostics.first(where: {
+            $0.sourceFilePath == post.fileURL.path || (!key.isEmpty && $0.translationKey == key)
+        }) else {
+            return []
+        }
+        let codes = Set(diagnostic.missingLanguageCodes)
+        return languageWorkspaces.filter { codes.contains($0.code) }
     }
 
     func selectTheme(named themeName: String) {
@@ -913,14 +1132,11 @@ final class AppViewModel: ObservableObject {
             try saveLocalConfigBundle()
         }
 
-        posts = try postService.loadPosts(for: project)
-        if let first = posts.first {
-            selectedPostID = first.id
-            editorPost = first
-        } else {
-            selectedPostID = nil
-            editorPost = BlogPost.empty(in: project.contentURL)
-        }
+        refreshDetectedThemes()
+        refreshLanguageWorkspaces()
+        refreshShortcodes()
+        availableArchetypes = postService.availableArchetypes(for: project)
+        try reloadPosts(selectFirstIfNeeded: true)
 
         appendPublishLog(
             operation: "配置还原",
@@ -965,6 +1181,98 @@ final class AppViewModel: ObservableObject {
         project.contentSubpath = source.contentSubpath
         project.gitRemote = source.gitRemote
         project.publishBranch = source.publishBranch
+    }
+
+    private func reloadPosts(selectFirstIfNeeded: Bool) throws {
+        let currentSelection = selectedPostID
+        posts = try postService.loadPosts(for: project)
+        if let currentSelection,
+           let matched = posts.first(where: { $0.id == currentSelection }) {
+            selectedPostID = matched.id
+            editorPost = matched
+            menuTreeEntries = contentWorkspaceService.menuTreeEntries(posts: posts)
+            return
+        }
+        if selectFirstIfNeeded, let first = posts.first {
+            selectedPostID = first.id
+            editorPost = first
+        } else if posts.isEmpty {
+            selectedPostID = nil
+            editorPost = BlogPost.empty(in: project.contentURL)
+        }
+        menuTreeEntries = contentWorkspaceService.menuTreeEntries(posts: posts)
+    }
+
+    private func refreshLanguageWorkspaces() {
+        languageWorkspaces = contentWorkspaceService.workspaces(for: project, config: config)
+        if let selected = languageWorkspaces.first(where: { $0.contentDir == project.contentSubpath }) {
+            selectedWorkspaceCode = selected.code
+        } else if let first = languageWorkspaces.first {
+            selectedWorkspaceCode = first.code
+        } else {
+            selectedWorkspaceCode = ""
+        }
+    }
+
+    private func refreshShortcodes() {
+        availableShortcodes = contentWorkspaceService.scanShortcodes(project: project, activeTheme: config.theme)
+    }
+
+    private func refreshContentDiagnostics() {
+        menuTreeEntries = contentWorkspaceService.menuTreeEntries(posts: posts)
+        let workspacePosts = loadPostsAcrossWorkspaces()
+        translationDiagnostics = contentWorkspaceService.translationDiagnostics(
+            workspaces: languageWorkspaces,
+            postsByWorkspace: workspacePosts,
+            projectRoot: project.rootURL
+        )
+
+        var referenceDiagnostics: [ReferenceDiagnostic] = []
+        for workspace in languageWorkspaces {
+            let workspaceProject = project.withContentSubpath(workspace.contentDir)
+            let workspacePostsList = workspacePosts[workspace.code] ?? []
+            referenceDiagnostics.append(
+                contentsOf: contentWorkspaceService.unresolvedReferences(posts: workspacePostsList, project: workspaceProject)
+            )
+        }
+        allWorkspaceReferenceDiagnostics = referenceDiagnostics.sorted {
+            if $0.postTitle == $1.postTitle {
+                return $0.reference < $1.reference
+            }
+            return $0.postTitle.localizedStandardCompare($1.postTitle) == .orderedAscending
+        }
+    }
+
+    private func loadPostsAcrossWorkspaces() -> [String: [BlogPost]] {
+        var results: [String: [BlogPost]] = [:]
+        for workspace in languageWorkspaces {
+            let workspaceProject = project.withContentSubpath(workspace.contentDir)
+            results[workspace.code] = (try? postService.loadPosts(for: workspaceProject)) ?? []
+        }
+        return results
+    }
+
+    private func relativePathForCurrentPost() -> String {
+        let standardizedPost = editorPost.fileURL.standardizedFileURL.path
+        let standardizedContentRoot = project.contentURL.standardizedFileURL.path
+        guard standardizedPost.hasPrefix(standardizedContentRoot) else {
+            return editorPost.fileURL.lastPathComponent
+        }
+        var relative = String(standardizedPost.dropFirst(standardizedContentRoot.count))
+        if relative.hasPrefix("/") { relative.removeFirst() }
+        return relative
+    }
+
+    private func stableTranslationKey(for post: BlogPost) -> String {
+        if !post.translationKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return post.translationKey
+        }
+        switch post.creationMode {
+        case .singleFile:
+            return post.fileURL.deletingPathExtension().lastPathComponent
+        case .leafBundle, .branchBundle:
+            return post.fileURL.deletingLastPathComponent().lastPathComponent
+        }
     }
 
     private func normalizeContentSubpathIfNeeded(localBundleLoaded: Bool) {
@@ -1694,6 +2002,26 @@ final class AppViewModel: ObservableObject {
                 title: "Git 冲突",
                 detail: conflicts.isEmpty ? "未检测到未解决冲突。" : "检测到 \(conflicts.count) 个未解决冲突，请先处理。",
                 level: conflicts.isEmpty ? .ok : .error
+            )
+        )
+
+        checks.append(
+            PublishCheck(
+                title: "页面引用",
+                detail: allWorkspaceReferenceDiagnostics.isEmpty
+                    ? "未检测到失效 ref / relref。"
+                    : "检测到 \(allWorkspaceReferenceDiagnostics.count) 处失效 ref / relref，请先修复。",
+                level: allWorkspaceReferenceDiagnostics.isEmpty ? .ok : .warning
+            )
+        )
+
+        checks.append(
+            PublishCheck(
+                title: "翻译副本",
+                detail: translationDiagnostics.isEmpty
+                    ? "各工作区的翻译副本已齐全。"
+                    : "检测到 \(translationDiagnostics.count) 篇内容缺少翻译副本。",
+                level: translationDiagnostics.isEmpty ? .ok : .warning
             )
         )
 

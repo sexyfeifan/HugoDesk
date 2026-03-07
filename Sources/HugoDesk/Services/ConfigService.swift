@@ -13,6 +13,7 @@ final class ConfigService {
         var config = ThemeConfig()
         var section = ""
         var linkIndex: Int?
+        var currentLanguageCode: String?
 
         for raw in lines {
             let trimmed = raw.trimmingCharacters(in: .whitespaces)
@@ -23,6 +24,7 @@ final class ConfigService {
             if trimmed.hasPrefix("[[") && trimmed.hasSuffix("]]") {
                 let name = String(trimmed.dropFirst(2).dropLast(2))
                 section = name
+                currentLanguageCode = nil
                 if name == "params.links" {
                     config.params.links.append(ThemeLink())
                     linkIndex = config.params.links.count - 1
@@ -33,6 +35,21 @@ final class ConfigService {
             if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
                 section = String(trimmed.dropFirst().dropLast())
                 linkIndex = nil
+                currentLanguageCode = nil
+                if section.hasPrefix("languages.") {
+                    currentLanguageCode = String(section.dropFirst("languages.".count))
+                    if !currentLanguageCode!.isEmpty,
+                       !config.languageProfiles.contains(where: { $0.code == currentLanguageCode! }) {
+                        config.languageProfiles.append(
+                            HugoLanguageProfile(
+                                code: currentLanguageCode!,
+                                title: currentLanguageCode!,
+                                contentDir: project.contentSubpath,
+                                weight: config.languageProfiles.count
+                            )
+                        )
+                    }
+                }
                 continue
             }
 
@@ -49,6 +66,7 @@ final class ConfigService {
                 case "languageCode": config.languageCode = parseString(value)
                 case "title": config.title = parseString(value)
                 case "theme": config.theme = parseString(value)
+                case "sectionPagesMenu": config.sectionPagesMenu = parseString(value)
                 case "pygmentsCodeFences": config.pygmentsCodeFences = parseBool(value)
                 case "pygmentsUseClasses": config.pygmentsUseClasses = parseBool(value)
                 default: break
@@ -94,11 +112,34 @@ final class ConfigService {
                 default: break
                 }
 
+            case "taxonomies":
+                config.taxonomies[key] = parseString(value)
+
             default:
+                if let currentLanguageCode, section == "languages.\(currentLanguageCode)" {
+                    if let idx = config.languageProfiles.firstIndex(where: { $0.code == currentLanguageCode }) {
+                        switch key {
+                        case "contentDir":
+                            config.languageProfiles[idx].contentDir = parseString(value)
+                        case "languageName", "title":
+                            config.languageProfiles[idx].title = parseString(value)
+                        case "weight":
+                            config.languageProfiles[idx].weight = Int(parseString(value)) ?? config.languageProfiles[idx].weight
+                        default:
+                            break
+                        }
+                    }
+                }
                 break
             }
         }
 
+        config.languageProfiles.sort { lhs, rhs in
+            if lhs.weight == rhs.weight {
+                return lhs.code < rhs.code
+            }
+            return lhs.weight < rhs.weight
+        }
         return config
     }
 
@@ -136,6 +177,11 @@ final class ConfigService {
         editor.set(
             key: "theme",
             value: encodeString(config.theme),
+            section: nil
+        )
+        editor.set(
+            key: "sectionPagesMenu",
+            value: encodeString(config.sectionPagesMenu),
             section: nil
         )
         editor.set(
@@ -214,6 +260,34 @@ final class ConfigService {
         editor.set(key: "mediaType", value: encodeString(config.outputFormatJSONMediaType), section: "outputFormats.json")
         editor.set(key: "baseName", value: encodeString(config.outputFormatJSONBaseName), section: "outputFormats.json")
         editor.set(key: "isPlainText", value: config.outputFormatJSONIsPlainText ? "true" : "false", section: "outputFormats.json")
+
+        let taxonomyRows = config.taxonomies
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key) = \(encodeString($0.value))" }
+        editor.replaceSection(name: "taxonomies", rows: taxonomyRows, preferredAnchorSection: "outputFormats.json")
+
+        let languageSections = config.languageProfiles
+            .filter { !$0.code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted {
+                if $0.weight == $1.weight {
+                    return $0.code < $1.code
+                }
+                return $0.weight < $1.weight
+            }
+            .map { profile -> (String, [String]) in
+                var rows: [String] = []
+                let contentDir = profile.contentDir.trimmingCharacters(in: .whitespacesAndNewlines)
+                let title = profile.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !contentDir.isEmpty {
+                    rows.append("contentDir = \(encodeString(contentDir))")
+                }
+                if !title.isEmpty {
+                    rows.append("languageName = \(encodeString(title))")
+                }
+                rows.append("weight = \(profile.weight)")
+                return ("languages.\(profile.code)", rows)
+            }
+        editor.replaceSections(prefix: "languages.", sections: languageSections, preferredAnchorSection: "taxonomies")
     }
 
     private func buildManagedConfigLines(_ config: ThemeConfig) -> [String] {
@@ -223,6 +297,7 @@ final class ConfigService {
         lines.append("languageCode = \(encodeString(config.languageCode))")
         lines.append("title = \(encodeString(config.title))")
         lines.append("theme = \(encodeString(config.theme))")
+        lines.append("sectionPagesMenu = \(encodeString(config.sectionPagesMenu))")
         lines.append("pygmentsCodeFences = \(config.pygmentsCodeFences ? "true" : "false")")
         lines.append("pygmentsUseClasses = \(config.pygmentsUseClasses ? "true" : "false")")
         lines.append("")
@@ -305,6 +380,35 @@ final class ConfigService {
         lines.append("  mediaType = \(encodeString(config.outputFormatJSONMediaType))")
         lines.append("  baseName = \(encodeString(config.outputFormatJSONBaseName))")
         lines.append("  isPlainText = \(config.outputFormatJSONIsPlainText ? "true" : "false")")
+
+        if !config.taxonomies.isEmpty {
+            lines.append("")
+            lines.append("[taxonomies]")
+            for entry in config.taxonomies.sorted(by: { $0.key < $1.key }) {
+                lines.append("  \(entry.key) = \(encodeString(entry.value))")
+            }
+        }
+
+        if !config.languageProfiles.isEmpty {
+            for profile in config.languageProfiles.sorted(by: {
+                if $0.weight == $1.weight {
+                    return $0.code < $1.code
+                }
+                return $0.weight < $1.weight
+            }) {
+                let code = profile.code.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !code.isEmpty else { continue }
+                lines.append("")
+                lines.append("[languages.\(code)]")
+                if !profile.contentDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  contentDir = \(encodeString(profile.contentDir))")
+                }
+                if !profile.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    lines.append("  languageName = \(encodeString(profile.title))")
+                }
+                lines.append("  weight = \(profile.weight)")
+            }
+        }
         return lines
     }
 
@@ -500,6 +604,23 @@ private struct ConfigLineEditor {
         }
     }
 
+    mutating func replaceSection(name: String, rows: [String], preferredAnchorSection: String?) {
+        removeSections { $0 == name }
+        guard !rows.isEmpty else {
+            return
+        }
+        insertSections([(name, rows)], preferredAnchorSection: preferredAnchorSection)
+    }
+
+    mutating func replaceSections(prefix: String, sections: [(String, [String])], preferredAnchorSection: String?) {
+        removeSections { $0.hasPrefix(prefix) }
+        let filtered = sections.filter { !$0.1.isEmpty }
+        guard !filtered.isEmpty else {
+            return
+        }
+        insertSections(filtered, preferredAnchorSection: preferredAnchorSection)
+    }
+
     func rendered() -> String {
         var output = lines
         while output.last?.trimmingCharacters(in: .whitespaces).isEmpty == true {
@@ -623,6 +744,34 @@ private struct ConfigLineEditor {
         return insertAt
     }
 
+    private mutating func insertSections(_ sections: [(String, [String])], preferredAnchorSection: String?) {
+        var insertAt: Int
+        if let preferredAnchorSection,
+           let sectionRef = sectionReference(named: preferredAnchorSection) {
+            insertAt = insertionIndexForSection(sectionRef: sectionRef)
+        } else {
+            insertAt = lines.count
+        }
+
+        if insertAt > 0 && !lines[insertAt - 1].trimmingCharacters(in: .whitespaces).isEmpty {
+            lines.insert("", at: insertAt)
+            insertAt += 1
+        }
+
+        for (index, section) in sections.enumerated() {
+            lines.insert("[\(section.0)]", at: insertAt)
+            insertAt += 1
+            for row in section.1 {
+                lines.insert("  \(row)", at: insertAt)
+                insertAt += 1
+            }
+            if index < sections.count - 1 {
+                lines.insert("", at: insertAt)
+                insertAt += 1
+            }
+        }
+    }
+
     private mutating func removeArrayTable(named name: String) {
         var idx = 0
         while idx < lines.count {
@@ -642,6 +791,38 @@ private struct ConfigLineEditor {
                 while idx > 0 && idx < lines.count
                     && lines[idx - 1].trimmingCharacters(in: .whitespaces).isEmpty
                     && lines[idx].trimmingCharacters(in: .whitespaces).isEmpty {
+                    lines.remove(at: idx)
+                }
+                continue
+            }
+            idx += 1
+        }
+    }
+
+    private mutating func removeSections(where predicate: (String) -> Bool) {
+        var idx = 0
+        while idx < lines.count {
+            let trimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+            if let header = parseHeader(from: trimmed), !header.isArray, predicate(header.name) {
+                let start = idx
+                idx += 1
+                while idx < lines.count {
+                    let nextTrimmed = lines[idx].trimmingCharacters(in: .whitespaces)
+                    if parseHeader(from: nextTrimmed) != nil {
+                        break
+                    }
+                    idx += 1
+                }
+                lines.removeSubrange(start..<idx)
+                idx = start
+                while idx > 0 && idx < lines.count
+                    && lines[idx - 1].trimmingCharacters(in: .whitespaces).isEmpty
+                    && lines[idx].trimmingCharacters(in: .whitespaces).isEmpty {
+                    lines.remove(at: idx)
+                }
+                if idx < lines.count && idx > 0
+                    && lines[idx].trimmingCharacters(in: .whitespaces).isEmpty
+                    && lines[idx - 1].trimmingCharacters(in: .whitespaces).isEmpty {
                     lines.remove(at: idx)
                 }
                 continue

@@ -16,6 +16,20 @@ struct BlogPost: Identifiable {
     var cover: String
     var author: String
     var keywords: [String]
+    var customTaxonomies: [String: [String]]
+    var taxonomyWeights: [String: Int]
+    var slug: String
+    var urlPath: String
+    var aliases: [String]
+    var translationKey: String
+    var menuEntry: MenuFrontMatter
+    var buildOptions: PostBuildOptions
+    var cascadeBuildOptions: PostBuildOptions?
+    var frontMatterFormat: FrontMatterFormat
+    var rawFrontMatter: String
+    var creationMode: ContentCreationMode
+    var bundleRootURL: URL?
+    var pageResources: [PageResourceItem]
     var body: String
 
     var id: String {
@@ -24,6 +38,23 @@ struct BlogPost: Identifiable {
 
     var fileName: String {
         fileURL.lastPathComponent
+    }
+
+    var displayFileName: String {
+        switch creationMode {
+        case .singleFile:
+            return fileURL.lastPathComponent
+        case .leafBundle, .branchBundle:
+            return bundleRootURL?.lastPathComponent ?? fileURL.deletingLastPathComponent().lastPathComponent
+        }
+    }
+
+    var usesPageBundle: Bool {
+        creationMode.createsBundle
+    }
+
+    var bundleDisplayName: String {
+        creationMode.displayName
     }
 
     static func empty(in contentURL: URL) -> BlogPost {
@@ -44,6 +75,20 @@ struct BlogPost: Identifiable {
             cover: "",
             author: "",
             keywords: [],
+            customTaxonomies: [:],
+            taxonomyWeights: [:],
+            slug: "",
+            urlPath: "",
+            aliases: [],
+            translationKey: "",
+            menuEntry: MenuFrontMatter(),
+            buildOptions: PostBuildOptions(),
+            cascadeBuildOptions: nil,
+            frontMatterFormat: .toml,
+            rawFrontMatter: "",
+            creationMode: .singleFile,
+            bundleRootURL: nil,
+            pageResources: [],
             body: ""
         )
     }

@@ -13,7 +13,7 @@ struct ModernCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.system(.headline, design: .rounded))
                 if let subtitle {
@@ -86,26 +86,38 @@ struct SettingRow<Content: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(title)
-                        .font(.body)
-                    Image(systemName: "info.circle")
-                        .foregroundStyle(.secondary)
-                        .help(helpText)
-                }
-                HStack(spacing: 8) {
-                    Text(key)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    ScopeBadge(text: scope)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                titleBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
-            field
-                .frame(width: 420, alignment: .trailing)
+                field
+                    .frame(width: 420, alignment: .trailing)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                titleBlock
+                field
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.body)
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                    .help(helpText)
+            }
+            HStack(spacing: 8) {
+                Text(key)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                ScopeBadge(text: scope)
+            }
         }
     }
 }

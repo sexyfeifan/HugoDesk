@@ -10,10 +10,16 @@ struct ThemeConfig: Codable {
     var params: ThemeParams = ThemeParams()
     var frontmatterTrackLastmod: Bool = true
     var googleAnalyticsID: String = ""
+    var sectionPagesMenu: String = ""
     var outputsHome: [String] = ["html", "json"]
     var outputFormatJSONMediaType: String = "application/json"
     var outputFormatJSONBaseName: String = "index"
     var outputFormatJSONIsPlainText: Bool = false
+    var taxonomies: [String: String] = [
+        "tag": "tags",
+        "category": "categories"
+    ]
+    var languageProfiles: [HugoLanguageProfile] = []
 }
 
 struct ThemeParams: Codable {
