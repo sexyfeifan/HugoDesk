@@ -335,7 +335,16 @@ final class AppViewModel: ObservableObject {
         editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
         frontMatterEditorMode = .structured
         selectedPostID = nil
-        statusText = "已创建新内容：\(editorPost.displayFileName)"
+
+        do {
+            try materializeEditorPostIfNeeded()
+            try reloadPosts(selectFirstIfNeeded: false, preferredSelectionID: editorPost.id)
+            editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
+            refreshContentDiagnostics()
+            statusText = "已创建新内容：\(editorPost.displayFileName)"
+        } catch {
+            statusText = error.localizedDescription
+        }
     }
 
     func deleteCurrentPost() {
@@ -520,8 +529,7 @@ final class AppViewModel: ObservableObject {
                 editorPost.rawFrontMatter = postService.renderFrontMatter(for: editorPost)
             }
             try postService.savePost(editorPost, preferRawFrontMatter: frontMatterEditorMode == .raw)
-            try reloadPosts(selectFirstIfNeeded: false)
-            selectedPostID = editorPost.id
+            try reloadPosts(selectFirstIfNeeded: false, preferredSelectionID: editorPost.id)
             editorPost.pageResources = imageAssetService.listPageResources(for: editorPost)
             refreshContentDiagnostics()
             statusText = "文章已保存。"
@@ -1183,8 +1191,8 @@ final class AppViewModel: ObservableObject {
         project.publishBranch = source.publishBranch
     }
 
-    private func reloadPosts(selectFirstIfNeeded: Bool) throws {
-        let currentSelection = selectedPostID
+    private func reloadPosts(selectFirstIfNeeded: Bool, preferredSelectionID: String? = nil) throws {
+        let currentSelection = preferredSelectionID ?? selectedPostID
         posts = try postService.loadPosts(for: project)
         if let currentSelection,
            let matched = posts.first(where: { $0.id == currentSelection }) {
@@ -1201,6 +1209,11 @@ final class AppViewModel: ObservableObject {
             editorPost = BlogPost.empty(in: project.contentURL)
         }
         menuTreeEntries = contentWorkspaceService.menuTreeEntries(posts: posts)
+    }
+
+    private func materializeEditorPostIfNeeded() throws {
+        guard !FileManager.default.fileExists(atPath: editorPost.fileURL.path) else { return }
+        try postService.savePost(editorPost, preferRawFrontMatter: false)
     }
 
     private func refreshLanguageWorkspaces() {

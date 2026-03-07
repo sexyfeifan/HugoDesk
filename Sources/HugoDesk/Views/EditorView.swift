@@ -126,8 +126,8 @@ struct EditorView: View {
 
                     if compact {
                         VStack(spacing: 12) {
-                            editorMainColumn
                             inspectorCard
+                            editorMainColumn
                         }
                     } else {
                         HStack(alignment: .top, spacing: 12) {
