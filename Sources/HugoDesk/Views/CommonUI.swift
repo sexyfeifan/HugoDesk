@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct ModernCard<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let title: String
     let subtitle: String?
     @ViewBuilder var content: Content
@@ -12,6 +14,12 @@ struct ModernCard<Content: View>: View {
     }
 
     var body: some View {
+        let surfaceTop = colorScheme == .dark ? Color.white.opacity(0.08) : Color.white.opacity(0.90)
+        let surfaceBottom = colorScheme == .dark ? Color.white.opacity(0.04) : Color.white.opacity(0.78)
+        let strokeTop = colorScheme == .dark ? Color.white.opacity(0.16) : Color.accentColor.opacity(0.35)
+        let strokeBottom = colorScheme == .dark ? Color.white.opacity(0.08) : Color.primary.opacity(0.10)
+        let shadowColor = colorScheme == .dark ? Color.black.opacity(0.28) : Color.black.opacity(0.06)
+
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(title)
@@ -29,7 +37,7 @@ struct ModernCard<Content: View>: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.9), Color.white.opacity(0.78)],
+                        colors: [surfaceTop, surfaceBottom],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     )
@@ -39,14 +47,14 @@ struct ModernCard<Content: View>: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(
                     LinearGradient(
-                        colors: [Color.accentColor.opacity(0.35), Color.primary.opacity(0.1)],
+                        colors: [strokeTop, strokeBottom],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
                     lineWidth: 1
                 )
         )
-        .shadow(color: Color.black.opacity(0.06), radius: 10, x: 0, y: 4)
+        .shadow(color: shadowColor, radius: 10, x: 0, y: 4)
     }
 }
 

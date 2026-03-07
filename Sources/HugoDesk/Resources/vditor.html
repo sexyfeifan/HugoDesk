@@ -7,7 +7,18 @@
   <link rel="stylesheet" href="./index.css">
   <style>
     :root {
-      color-scheme: light;
+      color-scheme: light dark;
+      --hd-bg: #f7f6f1;
+      --hd-fg: #111827;
+      --hd-muted: #6b7280;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --hd-bg: #111418;
+        --hd-fg: #e5e7eb;
+        --hd-muted: #9ca3af;
+      }
     }
 
     html, body {
@@ -15,7 +26,8 @@
       padding: 0;
       height: 100%;
       overflow: hidden;
-      background: #f7f6f1;
+      background: var(--hd-bg);
+      color: var(--hd-fg);
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
     }
 
@@ -28,9 +40,10 @@
       box-sizing: border-box;
       height: 100%;
       padding: 24px;
-      color: #6b7280;
+      color: var(--hd-muted);
       line-height: 1.7;
       white-space: pre-wrap;
+      background: var(--hd-bg);
     }
   </style>
 </head>
@@ -185,6 +198,10 @@
         ];
       }
 
+      function currentThemeName() {
+        return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "classic";
+      }
+
       function ensureBridge() {
         window.HugoDeskVditorBridge = {
           setValue: function (value) {
@@ -222,6 +239,7 @@
         editor = new Vditor("editor", {
           mode: "ir",
           height: "100%",
+          theme: currentThemeName(),
           icon: "",
           i18n: window.VditorI18n,
           lang: "zh_CN",
@@ -242,6 +260,21 @@
             post("input", value);
           }
         });
+
+        var schemeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+        if (typeof schemeMedia.addEventListener === "function") {
+          schemeMedia.addEventListener("change", function () {
+            if (!editor || typeof editor.setTheme !== "function") {
+              return;
+            }
+            var dark = schemeMedia.matches;
+            try {
+              editor.setTheme(dark ? "dark" : "classic", dark ? "dark" : "light", dark ? "native" : "github");
+            } catch (error) {
+              // Ignore theme switch errors and keep editor usable.
+            }
+          });
+        }
       }
 
       window.addEventListener("load", function () {
