@@ -40,6 +40,7 @@ final class AppViewModel: ObservableObject {
     @Published var aiBaseURL: String = AIProfile.default.baseURL
     @Published var aiModel: String = AIProfile.default.model
     @Published var aiAPIKey: String = ""
+    @Published var aiWritingMessages: [AIWritingMessage] = []
     @Published var latestWorkflowStatus: WorkflowRunStatus?
     @Published var latestWorkflowError: String = ""
     @Published var latestWorkflowCheckedAt: Date?
@@ -185,6 +186,14 @@ final class AppViewModel: ObservableObject {
         !preferredGitHubToken.isEmpty
     }
 
+    private var aiWritingHistoryDirectoryURL: URL {
+        project.rootURL.appendingPathComponent("HugoDeskStorage", isDirectory: true)
+    }
+
+    private var aiWritingHistoryURL: URL {
+        aiWritingHistoryDirectoryURL.appendingPathComponent("ai-writing-history.json", isDirectory: false)
+    }
+
     private var normalizedPublishMessage: String {
         let trimmed = publishMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? defaultPublishCommitMessage : trimmed
@@ -203,6 +212,7 @@ final class AppViewModel: ObservableObject {
             availableArchetypes = postService.availableArchetypes(for: project)
             try reloadPosts(selectFirstIfNeeded: true)
             refreshContentDiagnostics()
+            loadAIWritingHistory()
             persistProjectRootPath(project.rootPath)
             statusText = localBundleLoaded ? "项目已加载（已读取本地配置包）。" : "项目已加载。"
         } catch {
@@ -911,7 +921,11 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func generateWritingWithAI(sourceInput: String, onComplete: @escaping (String) -> Void) {
+    func generateWritingWithAI(
+        sourceInput: String,
+        onComplete: @escaping (String) -> Void,
+        onFailure: ((String) -> Void)? = nil
+    ) {
         guard !isAIFormatting else {
             statusText = "AI 写作仍在进行中，请稍候。"
             return
@@ -942,8 +956,78 @@ final class AppViewModel: ObservableObject {
                 self.finishAITaskProgress(.writing, success: true)
             } catch {
                 self.statusText = error.localizedDescription
+                onFailure?(error.localizedDescription)
                 self.finishAITaskProgress(.writing, success: false)
             }
+        }
+    }
+
+    func loadAIWritingHistory() {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: aiWritingHistoryURL.path) else {
+            aiWritingMessages = []
+            return
+        }
+        do {
+            let data = try Data(contentsOf: aiWritingHistoryURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            aiWritingMessages = try decoder.decode([AIWritingMessage].self, from: data)
+        } catch {
+            aiWritingMessages = []
+        }
+    }
+
+    func appendAIWritingMessage(role: AIWritingMessageRole, content: String) {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        aiWritingMessages.append(
+            AIWritingMessage(
+                role: role,
+                content: trimmed,
+                createdAt: Date()
+            )
+        )
+        if aiWritingMessages.count > 300 {
+            aiWritingMessages = Array(aiWritingMessages.suffix(300))
+        }
+        saveAIWritingHistory()
+    }
+
+    func clearAIWritingHistory() {
+        aiWritingMessages = []
+        let fm = FileManager.default
+        if fm.fileExists(atPath: aiWritingHistoryURL.path) {
+            try? fm.removeItem(at: aiWritingHistoryURL)
+        }
+        statusText = "AI 对话历史已清空。"
+    }
+
+    func aiWritingTranscriptText() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return aiWritingMessages.map { message in
+            let clock = formatter.string(from: message.createdAt)
+            return "[\(clock)] \(message.role.displayName)\n\(message.content)"
+        }
+        .joined(separator: "\n\n")
+    }
+
+    var aiWritingHistoryDirectoryPath: String {
+        aiWritingHistoryDirectoryURL.path
+    }
+
+    private func saveAIWritingHistory() {
+        do {
+            try FileManager.default.createDirectory(at: aiWritingHistoryDirectoryURL, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(aiWritingMessages)
+            try data.write(to: aiWritingHistoryURL, options: .atomic)
+        } catch {
+            statusText = "AI 对话历史写入失败：\(error.localizedDescription)"
         }
     }
 
@@ -2179,6 +2263,42 @@ struct PublishLogEntry: Identifiable {
             return "[\(clock)] \(operation) - \(summary)"
         }
         return "[\(clock)] \(operation) - \(summary)\n\(details)"
+    }
+}
+
+enum AIWritingMessageRole: String, Codable {
+    case user
+    case assistant
+    case system
+
+    var displayName: String {
+        switch self {
+        case .user:
+            return "我"
+        case .assistant:
+            return "AI"
+        case .system:
+            return "系统"
+        }
+    }
+}
+
+struct AIWritingMessage: Identifiable, Codable {
+    let id: UUID
+    let role: AIWritingMessageRole
+    let content: String
+    let createdAt: Date
+
+    init(
+        id: UUID = UUID(),
+        role: AIWritingMessageRole,
+        content: String,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.createdAt = createdAt
     }
 }
 

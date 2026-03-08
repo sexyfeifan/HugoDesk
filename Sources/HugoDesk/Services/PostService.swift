@@ -896,14 +896,53 @@ final class PostService {
 
     private func parseString(_ raw: String) -> String {
         var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        var wasQuoted = false
         if value.hasPrefix("\"") && value.hasSuffix("\"") && value.count >= 2 {
             value.removeFirst()
             value.removeLast()
+            wasQuoted = true
         } else if value.hasPrefix("'") && value.hasSuffix("'") && value.count >= 2 {
             value.removeFirst()
             value.removeLast()
         }
+        if wasQuoted {
+            value = decodeEscapes(value)
+        }
         return value
+    }
+
+    private func decodeEscapes(_ text: String) -> String {
+        var result = ""
+        var escaping = false
+        for ch in text {
+            if escaping {
+                switch ch {
+                case "n":
+                    result.append("\n")
+                case "r":
+                    result.append("\r")
+                case "t":
+                    result.append("\t")
+                case "\"":
+                    result.append("\"")
+                case "\\":
+                    result.append("\\")
+                default:
+                    result.append(ch)
+                }
+                escaping = false
+                continue
+            }
+            if ch == "\\" {
+                escaping = true
+            } else {
+                result.append(ch)
+            }
+        }
+        if escaping {
+            result.append("\\")
+        }
+        return result
     }
 
     private func parseBool(_ raw: String) -> Bool {
@@ -929,6 +968,9 @@ final class PostService {
         let escaped = text
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
         return "\"\(escaped)\""
     }
 
@@ -937,7 +979,12 @@ final class PostService {
     }
 
     private func encodeYAML(_ text: String) -> String {
-        let escaped = text.replacingOccurrences(of: "\"", with: "\\\"")
+        let escaped = text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\t", with: "\\t")
         return "\"\(escaped)\""
     }
 

@@ -355,10 +355,10 @@ struct EditorView: View {
     }
 
     private var aiWritingCard: some View {
-        ModernCard(title: "AI 写作", subtitle: "独立于正文编辑器的素材生成区，只保留一个主入口，不抢正文的主视觉。") {
+        ModernCard(title: "AI 写作", subtitle: "使用对话弹窗生成内容，历史会写入项目目录下的 HugoDeskStorage，便于后续复用。") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("可输入文字、链接或二者混合素材。生成结果会直接追加到正文。")
+                    Text("可输入文字、链接或二者混合素材。生成后会保留在对话中，可按需“追加到正文”。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -648,11 +648,9 @@ struct EditorView: View {
                         DatePicker("日期", selection: $viewModel.editorPost.date, displayedComponents: [.date, .hourAndMinute])
                         Toggle("草稿", isOn: $viewModel.editorPost.draft)
                             .toggleStyle(.switch)
-                        TextField("摘要", text: $viewModel.editorPost.summary)
                         TextField("短链接 slug", text: $viewModel.editorPost.slug)
                         TextField("固定网址 url", text: $viewModel.editorPost.urlPath)
                         TextField("别名 aliases，逗号分隔", text: $aliasesInput)
-                        TextField("翻译键 translationKey", text: $viewModel.editorPost.translationKey)
                         TextField("作者", text: $viewModel.editorPost.author)
                         TextField("封面路径", text: $viewModel.editorPost.cover)
                         TextField("关键词，逗号分隔", text: $keywordsInput)
@@ -678,34 +676,58 @@ struct EditorView: View {
             }
 
             inspectorSection("分类与摘要", hint: "tags、categories 和自定义 taxonomy 统一放在这里，摘要逻辑也只保留 Hugo 原生工作流。") {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("标签 tags，逗号分隔", text: $tagsInput)
-                    TextField("分类 categories，逗号分隔", text: $categoriesInput)
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("摘要（可选，默认留空）", text: $viewModel.editorPost.summary, axis: .vertical)
+                            .lineLimit(2...4)
+                            .textFieldStyle(.roundedBorder)
+
+                        HStack(alignment: .center, spacing: 8) {
+                            ContentKindBadge(text: viewModel.summaryMode.displayName)
+                            Spacer()
+                            Button("从正文提取摘要") {
+                                applyInputsToPost()
+                                viewModel.updateSummaryFromBody()
+                                refreshInputsFromPost()
+                            }
+                            .buttonStyle(.bordered)
+                            Button("插入 more 标记") {
+                                viewModel.insertSummaryDivider()
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                        Text(summaryModeDescription + " 默认不会自动写入摘要，只有手动输入或点击“从正文提取摘要”才会写入。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Divider()
+
+                    taxonomyInputSection(
+                        key: "tags",
+                        title: "标签 tags",
+                        placeholder: "输入标签，逗号分隔；下方可直接勾选历史标签"
+                    )
+
+                    taxonomyInputSection(
+                        key: "categories",
+                        title: "分类 categories",
+                        placeholder: "输入分类，逗号分隔；下方可直接勾选历史分类"
+                    )
+
                     ForEach(allDynamicTaxonomyKeys, id: \.self) { key in
-                        TextField("\(key)，逗号分隔", text: dynamicTaxonomyBinding(for: key))
+                        taxonomyInputSection(
+                            key: key,
+                            title: "\(key)",
+                            placeholder: "\(key)（逗号分隔，可新建）"
+                        )
                     }
-                    HStack {
-                        ContentKindBadge(text: viewModel.summaryMode.displayName)
-                        Spacer()
-                        Button("从正文提取摘要") {
-                            applyInputsToPost()
-                            viewModel.updateSummaryFromBody()
-                            refreshInputsFromPost()
-                        }
-                        .buttonStyle(.bordered)
-                        Button("插入 more 标记") {
-                            viewModel.insertSummaryDivider()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    Text(summaryModeDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
-
-            inspectorSection("taxonomy 权重与翻译", hint: "用于控制 taxonomy 列表排序与多语言副本覆盖情况。只有在你真的需要 Hugo 原生排序和翻译管理时再改。") {
+        case .hugo:
+            inspectorSection("taxonomy 权重与翻译", hint: "这组是 Hugo 高级项：用于 taxonomy 排序和多语言内容对齐。普通单语博客可以不填。") {
                 VStack(alignment: .leading, spacing: 10) {
+                    TextField("翻译键 translationKey（可选）", text: $viewModel.editorPost.translationKey)
                     ForEach(activeTaxonomyWeightKeys, id: \.self) { key in
                         Stepper("\(key)_weight：\(taxonomyWeightValue(for: key))", value: taxonomyWeightBinding(for: key), in: -100...100)
                     }
@@ -744,7 +766,7 @@ struct EditorView: View {
                     }
                 }
             }
-        case .hugo:
+
             inspectorSection("菜单入口", hint: "文档站、导航菜单和栏目排序时再改这里。普通博客文章通常不需要填写。") {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("菜单名，例如 main / docs", text: $viewModel.editorPost.menuEntry.menuName)
@@ -1052,11 +1074,20 @@ struct EditorView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("AI 写作")
                         .font(.headline)
-                    Text("可直接粘贴文字、链接，或文字加链接混合素材。软件会先读取可访问链接，再把模型生成的 Markdown 追加回正文。")
+                    Text("对话会保存在项目根目录下的 HugoDeskStorage/ai-writing-history.json，方便后续复用。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button("复制全部对话") {
+                    copyAIWritingTranscript()
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.aiWritingMessages.isEmpty)
+                Button("清空对话") {
+                    viewModel.clearAIWritingHistory()
+                }
+                .buttonStyle(.bordered)
                 Button("关闭") {
                     if !viewModel.isAIFormatting {
                         showingAIWritingSheet = false
@@ -1065,9 +1096,48 @@ struct EditorView: View {
                 .disabled(viewModel.isAIFormatting)
             }
 
+            Text(viewModel.aiWritingHistoryDirectoryPath)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        if viewModel.aiWritingMessages.isEmpty {
+                            Text("还没有历史对话。你可以先发送一条素材。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 6)
+                        } else {
+                            ForEach(viewModel.aiWritingMessages) { message in
+                                aiWritingMessageBubble(message)
+                                    .id(message.id)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(minHeight: 250, maxHeight: 320)
+                .padding(8)
+                .background(Color.black.opacity(0.03))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .onAppear {
+                    if let last = viewModel.aiWritingMessages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+                .onChange(of: viewModel.aiWritingMessages.count) { _ in
+                    if let last = viewModel.aiWritingMessages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
+            }
+
             TextEditor(text: $aiWritingSourceText)
                 .font(.body.monospaced())
-                .frame(minHeight: 260)
+                .frame(minHeight: 130)
                 .padding(8)
                 .background(Color.black.opacity(0.03))
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -1095,7 +1165,7 @@ struct EditorView: View {
                 }
                 .disabled(viewModel.isAIFormatting)
 
-                Button("开始生成") {
+                Button("发送并生成") {
                     runAIWriting()
                 }
                 .buttonStyle(.borderedProminent)
@@ -1103,7 +1173,64 @@ struct EditorView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 760, minHeight: 430)
+        .frame(minWidth: 840, minHeight: 560)
+    }
+
+    private func aiWritingMessageBubble(_ message: AIWritingMessage) -> some View {
+        let isUser = message.role == .user
+        let isSystem = message.role == .system
+        return HStack(alignment: .top, spacing: 10) {
+            if isUser {
+                Spacer(minLength: 60)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(message.role.displayName)
+                        .font(.caption.weight(.semibold))
+                    Text(aiMessageTimestampText(message.createdAt))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                Text(message.content)
+                    .font(.body)
+                    .textSelection(.enabled)
+                HStack(spacing: 8) {
+                    Button("复制") {
+                        copyAIWritingMessage(message)
+                    }
+                    .buttonStyle(.bordered)
+                    if message.role == .assistant {
+                        Button("追加到正文") {
+                            appendAIMessageToEditor(message.content)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(
+                        isUser
+                        ? Color.accentColor.opacity(0.16)
+                        : (isSystem ? Color.orange.opacity(0.16) : Color.secondary.opacity(0.12))
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(
+                        isUser
+                        ? Color.accentColor.opacity(0.35)
+                        : (isSystem ? Color.orange.opacity(0.35) : Color.secondary.opacity(0.2)),
+                        lineWidth: 1
+                    )
+            )
+            if !isUser {
+                Spacer(minLength: 60)
+            }
+        }
     }
 
     private var sidebarRoots: [SidebarNode] {
@@ -1270,6 +1397,130 @@ struct EditorView: View {
         .frame(width: width, alignment: .leading)
     }
 
+    @ViewBuilder
+    private func taxonomyInputSection(key: String, title: String, placeholder: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: taxonomyInputBinding(for: key))
+                .textFieldStyle(.roundedBorder)
+            let suggestions = taxonomySuggestions(for: key)
+            if suggestions.isEmpty {
+                Text("暂无本地可选项，可直接输入新值。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                FlowWrap(spacing: 6) {
+                    ForEach(suggestions, id: \.self) { term in
+                        taxonomyTermButton(term, key: key, isSelected: currentTaxonomyValues(for: key).contains(term))
+                    }
+                }
+            }
+        }
+    }
+
+    private func taxonomyTermButton(_ term: String, key: String, isSelected: Bool) -> some View {
+        Button {
+            toggleTaxonomyTerm(term, key: key)
+        } label: {
+            Text(term)
+                .font(.caption2.weight(.medium))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(
+                    Capsule()
+                        .fill(isSelected ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.12))
+                )
+                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                .overlay(
+                    Capsule()
+                        .stroke(isSelected ? Color.accentColor.opacity(0.45) : Color.secondary.opacity(0.2), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func taxonomyInputBinding(for key: String) -> Binding<String> {
+        switch key {
+        case "tags":
+            return $tagsInput
+        case "categories":
+            return $categoriesInput
+        default:
+            return dynamicTaxonomyBinding(for: key)
+        }
+    }
+
+    private func currentTaxonomyValues(for key: String) -> [String] {
+        switch key {
+        case "tags":
+            return splitCSV(tagsInput)
+        case "categories":
+            return splitCSV(categoriesInput)
+        default:
+            return splitCSV(dynamicTaxonomyInputs[key] ?? "")
+        }
+    }
+
+    private func setTaxonomyValues(_ values: [String], for key: String) {
+        let text = values.joined(separator: ", ")
+        switch key {
+        case "tags":
+            tagsInput = text
+        case "categories":
+            categoriesInput = text
+        default:
+            dynamicTaxonomyInputs[key] = text
+        }
+    }
+
+    private func toggleTaxonomyTerm(_ term: String, key: String) {
+        var values = currentTaxonomyValues(for: key)
+        if let index = values.firstIndex(of: term) {
+            values.remove(at: index)
+        } else {
+            values.append(term)
+        }
+        setTaxonomyValues(normalizeTerms(values), for: key)
+    }
+
+    private func taxonomySuggestions(for key: String) -> [String] {
+        var terms = Set(currentTaxonomyValues(for: key))
+        for post in viewModel.posts {
+            let candidates: [String]
+            switch key {
+            case "tags":
+                candidates = post.tags
+            case "categories":
+                candidates = post.categories
+            default:
+                candidates = post.customTaxonomies[key] ?? []
+            }
+            for term in candidates {
+                let normalized = term.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !normalized.isEmpty {
+                    terms.insert(normalized)
+                }
+            }
+        }
+        return terms.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    private func normalizeTerms(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var output: [String] = []
+        for value in values {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { continue }
+            guard !seen.contains(normalized) else { continue }
+            seen.insert(normalized)
+            output.append(normalized)
+        }
+        return output
+    }
+
     private func refreshInputsFromPost() {
         tagsInput = viewModel.editorPost.tags.joined(separator: ", ")
         categoriesInput = viewModel.editorPost.categories.joined(separator: ", ")
@@ -1308,14 +1559,14 @@ struct EditorView: View {
     }
 
     private func applyInputsToPost() {
-        viewModel.editorPost.tags = splitCSV(tagsInput)
-        viewModel.editorPost.categories = splitCSV(categoriesInput)
-        viewModel.editorPost.keywords = splitCSV(keywordsInput)
-        viewModel.editorPost.aliases = splitCSV(aliasesInput)
+        viewModel.editorPost.tags = normalizeTerms(splitCSV(tagsInput))
+        viewModel.editorPost.categories = normalizeTerms(splitCSV(categoriesInput))
+        viewModel.editorPost.keywords = normalizeTerms(splitCSV(keywordsInput))
+        viewModel.editorPost.aliases = normalizeTerms(splitCSV(aliasesInput))
 
         var preserved = viewModel.editorPost.customTaxonomies
         for key in allDynamicTaxonomyKeys {
-            let values = splitCSV(dynamicTaxonomyInputs[key] ?? "")
+            let values = normalizeTerms(splitCSV(dynamicTaxonomyInputs[key] ?? ""))
             if values.isEmpty {
                 preserved.removeValue(forKey: key)
             } else {
@@ -1531,24 +1782,63 @@ struct EditorView: View {
         if editorImplementation == .vditor {
             vditorBridge.rememberSelection()
         }
+        viewModel.loadAIWritingHistory()
         showingAIWritingSheet = true
     }
 
     private func runAIWriting() {
-        let source = aiWritingSourceText
-        viewModel.generateWritingWithAI(sourceInput: source) { generated in
-            let snippet = normalizedAIWritingSnippet(generated)
-            guard !snippet.isEmpty else { return }
-            insertSnippetIntoEditor(snippet)
-            aiWritingSourceText = ""
-            showingAIWritingSheet = false
-        }
+        let source = aiWritingSourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !source.isEmpty else { return }
+        viewModel.appendAIWritingMessage(role: .user, content: source)
+        aiWritingSourceText = ""
+        viewModel.generateWritingWithAI(
+            sourceInput: source,
+            onComplete: { generated in
+                let reply = generated.trimmingCharacters(in: .whitespacesAndNewlines)
+                if reply.isEmpty {
+                    viewModel.appendAIWritingMessage(role: .system, content: "AI 返回为空，请调整提示词后重试。")
+                } else {
+                    viewModel.appendAIWritingMessage(role: .assistant, content: reply)
+                }
+            },
+            onFailure: { errorText in
+                viewModel.appendAIWritingMessage(role: .system, content: errorText)
+            }
+        )
     }
 
     private func pasteAIWritingSourceFromClipboard() {
         if let pasted = NSPasteboard.general.string(forType: .string), !pasted.isEmpty {
             aiWritingSourceText = pasted
         }
+    }
+
+    private func copyAIWritingTranscript() {
+        let text = viewModel.aiWritingTranscriptText()
+        guard !text.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        viewModel.statusText = "已复制全部 AI 对话。"
+    }
+
+    private func copyAIWritingMessage(_ message: AIWritingMessage) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.content, forType: .string)
+        viewModel.statusText = "已复制一条对话内容。"
+    }
+
+    private func appendAIMessageToEditor(_ content: String) {
+        let snippet = normalizedAIWritingSnippet(content)
+        guard !snippet.isEmpty else { return }
+        insertSnippetIntoEditor(snippet)
+        viewModel.statusText = "已将 AI 回复追加到正文。"
+    }
+
+    private func aiMessageTimestampText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     private func normalizedAIWritingSnippet(_ raw: String) -> String {
@@ -1807,7 +2097,7 @@ private struct FlowWrap<Content: View>: View {
     @ViewBuilder var content: () -> Content
 
     private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: 140), spacing: spacing)]
+        [GridItem(.adaptive(minimum: 88), spacing: spacing)]
     }
 
     var body: some View {
